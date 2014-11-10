@@ -23,6 +23,7 @@
 #include <vector>
 #include <string>
 #include <unordered_map>
+#include <set>
 
 #include <ida.hpp>
 #include <area.hpp>
@@ -31,6 +32,7 @@
 #include <idd.hpp>
 #include <segment.hpp>
 #include <dbg.hpp>
+#include <allins.hpp>
 
 #include "debmod.h"
 #include "include\ps3tmapi.h"
@@ -79,8 +81,8 @@ std::unordered_map<int, std::string> process_names;
 std::unordered_map<int, std::string> modules;
 std::unordered_map<int, int> main_bpts_map;
 
-std::vector<uint32> step_bpts;
-std::vector<uint32> main_bpts;
+std::set<uint32> step_bpts;
+std::set<uint32> main_bpts;
 
 static const unsigned char bpt_code[] = {0x7f, 0xe0, 0x00, 0x08};
 
@@ -810,10 +812,9 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 			if (target_event.uEventType == SNPS3_DBG_EVENT_PPU_EXP_TRAP)
 				break;
 
-			if (singlestep == true || continue_from_bp == true) {
-
+			if (singlestep == true || continue_from_bp == true)
+            {
 				uint32 addr;
-				std::vector<uint32>::iterator it;
 
 				ev.eid     = STEP;
 				ev.pid     = ProcessID;
@@ -826,14 +827,12 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 
 				events.enqueue(ev, IN_BACK);
 
-				while (!step_bpts.empty())
+                for (std::set<uint32>::const_iterator step_it = step_bpts.begin(); step_it != step_bpts.end(); ++step_it)
 				{
-					addr = step_bpts.back();
-					step_bpts.pop_back();
+                    addr = *step_it;
 
-					it = std::find(main_bpts.begin(), main_bpts.end(), addr);
-					if (it == main_bpts.end()) {
-
+                    if (main_bpts.end() == main_bpts.find(addr))
+                    {
 						main_bpts_map.erase(addr);
 
 						if (SN_FAILED( snr = SNPS3ClearBreakPoint(TargetID, PS3_UI_CPU, ProcessID, bswap64(pDbgData->ppu_exc_trap.uPPUThreadID), addr)))
@@ -845,18 +844,20 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 							debug_printf("step bpt cleared\n");
 						}
 					}
-
 				}
+                step_bpts.clear();
 
 				if (continue_from_bp == true)
 				{
 					continue_from_bp = false;
-				} else {
+				}
+                else
+                {
 					singlestep = false;
 				}
-
-			} else {
-
+			}
+            else
+            {
 				ev.eid     = BREAKPOINT;
 				ev.pid     = ProcessID;
 				ev.tid     = bswap64(pDbgData->ppu_exc_trap.uPPUThreadID);
@@ -867,7 +868,6 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 				ev.exc.ea  = BADADDR;
 
 				events.enqueue(ev, IN_BACK);
-
 			}
 		}
 		break;
@@ -1550,8 +1550,8 @@ int addr_has_bp(uint32 ea)
 
 		SNPS3GetBreakPoints(TargetID, PS3_UI_CPU, ProcessID, -1, &BPCount, BPAddress);
 
-		for(uint32 i=0;i<BPCount;i++) {
-
+		for(uint32 i=0;i<BPCount;i++)
+        {
 			if (ea == BPAddress[i])
 			{
 				return 1;
@@ -1812,8 +1812,8 @@ int idaapi continue_after_event(const debug_event_t *event)
 
 #endif
 
-	if (event->eid == PROCESS_ATTACH || event->eid == PROCESS_SUSPEND || event->eid == STEP || event->eid == BREAKPOINT) {
-
+	if (event->eid == PROCESS_ATTACH || event->eid == PROCESS_SUSPEND || event->eid == STEP || event->eid == BREAKPOINT)
+    {
 		if (event->eid == BREAKPOINT)
 		{
 			if (addr_has_bp(event->ea) == true)
@@ -1894,181 +1894,99 @@ int idaapi thread_continue(thid_t tid)
 	return 1;
 }
 
+#define G_STR_SIZE 256
+
 //-------------------------------------------------------------------------
 int do_step(uint32 tid, uint32 dbg_notification)
 {
-	uint32 ea;
-	uint32 instruction;
-	uint32 next_addr;
-	uint32 resolved_addr;
-	uint32 addr;
-	uint32 v;
-	int state;
-	
-	ea = read_pc_register(tid);
+    char mnem[G_STR_SIZE] = {0};
 
-	SNPS3ProcessGetMemory(TargetID, PS3_UI_CPU, ProcessID, -1, ea, 4, (byte *)&instruction);
-	if (instruction == *(uint32*)bpt_code)
-		instruction = main_bpts_map[ea];
-
-	instruction = bswap32(instruction);
+	ea_t ea = read_pc_register(tid);
 	
-	state = get_thread_state(tid);
+	int state = get_thread_state(tid);
 
 	if (state == SNPS3_PPU_SLEEP)
 	{
 		msg("THIS THREAD SLEEPS!\n");
 	}
 
-	next_addr = ea + 4;
-	resolved_addr = next_addr;
-	
-	//case 1 - bge, bne, beq, blt...
-	if ( instruction >> 26 == 16 )
-	{
-		addr = instruction & 0xFFFC;
-		
-		if ( addr & 0x8000 )
-			addr = addr | 0xFFFF0000;
-		
-		if ( !(instruction & 2) )
-			addr += ea;
-		
-		resolved_addr = addr;
-		
-		if ( instruction & 1 )
-		{
-			SNPS3ProcessGetMemory(TargetID, PS3_UI_CPU, ProcessID, -1, next_addr, 4, (byte *)&instruction);
-			if (instruction != *(uint32*)bpt_code)
-				main_bpts_map[next_addr] = instruction;
+    mnem[0] = 0;
 
-			SNPS3SetBreakPoint(TargetID, PS3_UI_CPU, ProcessID, tid, next_addr);
-			step_bpts.push_back(next_addr);
+	ea_t next_addr = ea + 4;
+    ea_t resolved_addr = BADADDR;
+    if (decode_insn(ea))
+    {
+        insn_t l_cmd = cmd;
+        switch (l_cmd.itype)
+        {
+        case PPC_bc:         // Branch Conditional
+            {
+                resolved_addr = l_cmd.Op3.addr;
+            }
+            break;
+        case PPC_bdnz:       // CTR--; branch if CTR non-zero
+        case PPC_bdz:        // CTR--; branch if CTR zero
+        case PPC_blt:        // Branch if less than
+        case PPC_ble:        // Branch if less than or equal
+        case PPC_beq:        // Branch if equal
+        case PPC_bge:        // Branch if greater than or equal
+        case PPC_bgt:        // Branch if greater than
+        case PPC_bne:        // Branch if not equal
+            {
+                resolved_addr = l_cmd.Op2.addr;
+            }
+            break;
+        case PPC_b:          // Branch
+            {
+                resolved_addr = l_cmd.Op1.addr;
+            }
+            break;
+        case PPC_bcctr:      // Branch Conditional to Count Register
+            {
+                resolved_addr = read_ctr_register(tid);
+            }
+            break;
+        case PPC_bclr:       // Branch Conditional to Link Register
+            {
+                resolved_addr = read_lr_register(tid);
+            }
+            break;
+        default:
+            {
+            }
+            break;
+        }
 
-			SNPS3ProcessGetMemory(TargetID, PS3_UI_CPU, ProcessID, -1, resolved_addr, 4, (byte *)&instruction);
-			if (instruction != *(uint32*)bpt_code)
-				main_bpts_map[resolved_addr] = instruction;
+        // get mnemonic
+        ua_mnem(ea, mnem, sizeof(mnem));
 
-			SNPS3SetBreakPoint(TargetID, PS3_UI_CPU, ProcessID, tid, resolved_addr);
-			step_bpts.push_back(resolved_addr);
-			
-			return 1;
-		}
+        debug_printf("do_step:\n");
+        debug_printf("\tnext address: %08X - resolved address: %08X - decoded mnemonic: %s\n", next_addr, resolved_addr, mnem);
+    }
 
-		SNPS3ProcessGetMemory(TargetID, PS3_UI_CPU, ProcessID, -1, next_addr, 4, (byte *)&instruction);
-		if (instruction != *(uint32*)bpt_code)
-			main_bpts_map[next_addr] = instruction;
+    uint32 instruction;
+    if (BADADDR != next_addr)
+    {
+        SNPS3ProcessGetMemory(TargetID, PS3_UI_CPU, ProcessID, -1, next_addr, 4, (byte *)&instruction);
+        if (instruction != *(uint32*)bpt_code)
+            main_bpts_map[next_addr] = instruction;
 
-		SNPS3SetBreakPoint(TargetID, PS3_UI_CPU, ProcessID, tid, next_addr);
-		step_bpts.push_back(next_addr);
-		
-		SNPS3ProcessGetMemory(TargetID, PS3_UI_CPU, ProcessID, -1, resolved_addr, 4, (byte *)&instruction);
-		if (instruction != *(uint32*)bpt_code)
-			main_bpts_map[resolved_addr] = instruction;
+        SNPS3SetBreakPoint(TargetID, PS3_UI_CPU, ProcessID, tid, next_addr);
+        step_bpts.insert(next_addr);
+    }
 
-		SNPS3SetBreakPoint(TargetID, PS3_UI_CPU, ProcessID, tid, resolved_addr);
-		step_bpts.push_back(resolved_addr);
-		
-    	return 1;
-	}
+    if (BADADDR != resolved_addr)
+    {
 
-	//case 2 - bl, b
-	if ( instruction >> 26 == 18 )
-	{
-		addr = instruction & 0x3FFFFFC;
-		
-		if ( addr & 0x2000000 )
-			addr = addr | 0xFC000000;
-		
-		if ( !(instruction & 2) )
-			addr += ea;
-		
-		resolved_addr = addr;
-		
-		if ( instruction & 1 )
-		{
-    		// bl
+        SNPS3ProcessGetMemory(TargetID, PS3_UI_CPU, ProcessID, -1, resolved_addr, 4, (byte *)&instruction);
+        if (instruction != *(uint32*)bpt_code)
+            main_bpts_map[resolved_addr] = instruction;
 
-			SNPS3ProcessGetMemory(TargetID, PS3_UI_CPU, ProcessID, -1, resolved_addr, 4, (byte *)&instruction);
-			if (instruction != *(uint32*)bpt_code)
-				main_bpts_map[resolved_addr] = instruction;
+        SNPS3SetBreakPoint(TargetID, PS3_UI_CPU, ProcessID, tid, resolved_addr);
+        step_bpts.insert(resolved_addr);
+    }
 
-		  	SNPS3SetBreakPoint(TargetID, PS3_UI_CPU, ProcessID, tid, resolved_addr);
-		  	step_bpts.push_back(resolved_addr);
-
-      		return 1;
-    	}
-
-		// b
-
-		SNPS3ProcessGetMemory(TargetID, PS3_UI_CPU, ProcessID, -1, resolved_addr, 4, (byte *)&instruction);
-		if (instruction != *(uint32*)bpt_code)
-			main_bpts_map[resolved_addr] = instruction;
-
-		SNPS3SetBreakPoint(TargetID, PS3_UI_CPU, ProcessID, tid, resolved_addr);
-		step_bpts.push_back(resolved_addr);
-		
-		return 1;
-	}
-
-	//case 3 - all
-	if ( instruction >> 26 != 19 || instruction & 0xE000 ) 
-	{
-		SNPS3ProcessGetMemory(TargetID, PS3_UI_CPU, ProcessID, -1, next_addr, 4, (byte *)&instruction);
-		if (instruction != *(uint32*)bpt_code)
-			main_bpts_map[next_addr] = instruction;
-
-		SNPS3SetBreakPoint(TargetID, PS3_UI_CPU, ProcessID, tid, next_addr);
-		step_bpts.push_back(next_addr);
-	
-		return 1;
-	}
-	
-	v = (instruction >> 1) & 0x3FF;
-	
-	//case 4 - blr, beqlr, blelr...
-	if ( v == 16 )
-	{		
-		resolved_addr = read_lr_register(tid);
-		
-		SNPS3ProcessGetMemory(TargetID, PS3_UI_CPU, ProcessID, -1, next_addr, 4, (byte *)&instruction);
-		if (instruction != *(uint32*)bpt_code)
-			main_bpts_map[next_addr] = instruction;
-
-		SNPS3SetBreakPoint(TargetID, PS3_UI_CPU, ProcessID, tid, next_addr);
-		step_bpts.push_back(next_addr);
-		
-		SNPS3ProcessGetMemory(TargetID, PS3_UI_CPU, ProcessID, -1, resolved_addr, 4, (byte *)&instruction);
-		if (instruction != *(uint32*)bpt_code)
-			main_bpts_map[resolved_addr] = instruction;
-
-		SNPS3SetBreakPoint(TargetID, PS3_UI_CPU, ProcessID, tid, resolved_addr);
-		step_bpts.push_back(resolved_addr);
-		
-		return 1;
-	}
-
-	//case 5 - bctrl, bctr, bltctr, bgtctrl...
-	if ( v != 528 )
-		return 1;
-
-	resolved_addr = read_ctr_register(tid);
-	
-	SNPS3ProcessGetMemory(TargetID, PS3_UI_CPU, ProcessID, -1, next_addr, 4, (byte *)&instruction);
-	if (instruction != *(uint32*)bpt_code)
-		main_bpts_map[next_addr] = instruction;
-
-	SNPS3SetBreakPoint(TargetID, PS3_UI_CPU, ProcessID, tid, next_addr);
-	step_bpts.push_back(next_addr);
-	
-	SNPS3ProcessGetMemory(TargetID, PS3_UI_CPU, ProcessID, -1, resolved_addr, 4, (byte *)&instruction);
-	if (instruction != *(uint32*)bpt_code)
-		main_bpts_map[resolved_addr] = instruction;
-
-	SNPS3SetBreakPoint(TargetID, PS3_UI_CPU, ProcessID, tid, resolved_addr);
-	step_bpts.push_back(resolved_addr);
-
-	return 1;
+    return 1;
 }
 
 //--------------------------------------------------------------------------
@@ -2287,8 +2205,8 @@ ssize_t idaapi read_memory(ea_t ea, void *buffer, size_t size)
 {
 	SNPS3ProcessGetMemory(TargetID, PS3_UI_CPU, ProcessID, -1, ea, size, (byte *)buffer);
 
-	for(int i=0;i<size;i+=4) {
-
+	for (int i = 0; i < size; i += 4)
+    {
 		if(*(uint32 *)((char*)buffer+i) == *(uint32 *)bpt_code) 
 		{
 			*(uint32 *)((char*)buffer+i) = main_bpts_map[ea+i];
@@ -2354,9 +2272,9 @@ int idaapi is_ok_bpt(bpttype_t type, ea_t ea, int len)
 				{
 					//dabr_is_set is not set yet bug
 					return BPT_OK;
-				
-				} else {
-				
+				}
+                else
+                {
 					msg("It's possible to set a single hardware breakpoint\n");
 					return BPT_TOO_MANY;
 				}
@@ -2385,9 +2303,9 @@ int idaapi is_ok_bpt(bpttype_t type, ea_t ea, int len)
 				{
 					//dabr_is_set is not set yet bug
 					return BPT_OK;
-
-				} else {
-
+				}
+                else
+                {
 					msg("It's possible to set a single hardware breakpoint\n");
 					return BPT_TOO_MANY;
 				}
@@ -2404,189 +2322,189 @@ int idaapi is_ok_bpt(bpttype_t type, ea_t ea, int len)
 //--------------------------------------------------------------------------
 int idaapi update_bpts(update_bpt_info_t *bpts, int nadd, int ndel)
 {
-	int i;
-	std::vector<uint32>::iterator it;
-	uint32 orig_inst = -1;
-	uint32 BPCount;
-	int cnt = 0;
+    int i;
+    std::vector<uint32>::iterator it;
+    uint32 orig_inst = -1;
+    uint32 BPCount;
+    int cnt = 0;
 
-	//SNPS3GetBreakPoints(TargetID, PS3_UI_CPU, ProcessID, -1, &BPCount, NULL);
-	//debug_printf("BreakPoints sum: %d\n", BPCount);
+    //SNPS3GetBreakPoints(TargetID, PS3_UI_CPU, ProcessID, -1, &BPCount, NULL);
+    //debug_printf("BreakPoints sum: %d\n", BPCount);
 
-	//bp_list();
+    //bp_list();
 
-	for(i = 0; i < nadd; i++) {
+    for (i = 0; i < nadd; i++)
+    {
 
-		debug_printf("add_bpt: type: %d, ea: 0x%X, code: %d\n", bpts[i].type, bpts[i].ea, bpts[i].code);
+        debug_printf("add_bpt: type: %d, ea: 0x%X, code: %d\n", bpts[i].type, bpts[i].ea, bpts[i].code);
 
-		//BPT_SKIP
+        //BPT_SKIP
 
-		switch(bpts[i].type)
-		{
-			case BPT_SOFT:
-				{
-					debug_printf("Software breakpoint\n");
+        switch(bpts[i].type)
+        {
+        case BPT_SOFT:
+            {
+                debug_printf("Software breakpoint\n");
 
-					SNPS3ProcessGetMemory(TargetID, PS3_UI_CPU, ProcessID, -1, bpts[i].ea, 4, (byte *)&orig_inst);
+                SNPS3ProcessGetMemory(TargetID, PS3_UI_CPU, ProcessID, -1, bpts[i].ea, 4, (byte *)&orig_inst);
 
-					if (orig_inst != *(uint32*)bpt_code)
-						main_bpts_map[bpts[i].ea] = orig_inst;
+                if (orig_inst != *(uint32*)bpt_code)
+                    main_bpts_map[bpts[i].ea] = orig_inst;
 
-					//debug_printf("orig_inst = 0x%X\n", bswap32(orig_inst));
+                //debug_printf("orig_inst = 0x%X\n", bswap32(orig_inst));
 
-					bpts[i].orgbytes.push_back(orig_inst);
+                bpts[i].orgbytes.qclear();
+                bpts[i].orgbytes.append(&orig_inst,  sizeof(orig_inst));
 
-					SNPS3SetBreakPoint(TargetID, PS3_UI_CPU, ProcessID, -1, bpts[i].ea);
+                SNPS3SetBreakPoint(TargetID, PS3_UI_CPU, ProcessID, -1, bpts[i].ea);
 
-					bpts[i].code = BPT_OK;
+                bpts[i].code = BPT_OK;
 
-					main_bpts.push_back(bpts[i].ea);
+                main_bpts.insert(bpts[i].ea);
 
-					cnt++;
-				}
-				break;
+                cnt++;
+            }
+            break;
 
-			case BPT_EXEC:
-				{
-					debug_printf("Execute instruction\n");
-					//bpts[i].size
+        case BPT_EXEC:
+            {
+                debug_printf("Execute instruction\n");
+                //bpts[i].size
 
-					bpts[i].code = BPT_BAD_TYPE;
-				}
-				break;
+                bpts[i].code = BPT_BAD_TYPE;
+            }
+            break;
 
-			case BPT_WRITE:
-				{
-					debug_printf("Write access\n");
-					//bpts[i].size
+        case BPT_WRITE:
+            {
+                debug_printf("Write access\n");
+                //bpts[i].size
 
-					if (dabr_is_set == false)
-					{
-						SNPS3ProcessStop(TargetID, ProcessID);
-					
-						SNPS3SetDABR(TargetID, ProcessID, bpts[i].ea | 6);
-					
-						debug_printf("DABR: 0x%X\n", bpts[i].ea | 6);
-					
-						SNPS3ProcessContinue(TargetID, ProcessID);
-					
-						dabr_addr = bpts[i].ea;
+                if (dabr_is_set == false)
+                {
+                    SNPS3ProcessStop(TargetID, ProcessID);
 
-						dabr_type = 6;
+                    SNPS3SetDABR(TargetID, ProcessID, bpts[i].ea | 6);
 
-						dabr_is_set = true;
-					
-						bpts[i].code = BPT_OK;
-					
-						cnt++;
-					
-					} else {
-					
-						msg("It's possible to set a single hardware breakpoint, DABR 0x%X is not set\n", bpts[i].ea);
-						bpts[i].code = BPT_TOO_MANY;
-					}
-				}
-				break;
+                    debug_printf("DABR: 0x%X\n", bpts[i].ea | 6);
 
-				// No read access?
+                    SNPS3ProcessContinue(TargetID, ProcessID);
 
-			case BPT_RDWR:
-				{
-					debug_printf("Read/write access\n");
-					//bpts[i].size
+                    dabr_addr = bpts[i].ea;
 
-					if (dabr_is_set == false)
-					{
-						SNPS3ProcessStop(TargetID, ProcessID);
+                    dabr_type = 6;
 
-						SNPS3SetDABR(TargetID, ProcessID, bpts[i].ea | 7);
+                    dabr_is_set = true;
 
-						debug_printf("DABR: 0x%X\n", bpts[i].ea | 7);
+                    bpts[i].code = BPT_OK;
 
-						SNPS3ProcessContinue(TargetID, ProcessID);
+                    cnt++;
 
-						dabr_addr = bpts[i].ea;
+                } else {
 
-						dabr_type = 7;
+                    msg("It's possible to set a single hardware breakpoint, DABR 0x%X is not set\n", bpts[i].ea);
+                    bpts[i].code = BPT_TOO_MANY;
+                }
+            }
+            break;
 
-						dabr_is_set = true;
+            // No read access?
 
-						bpts[i].code = BPT_OK;
+        case BPT_RDWR:
+            {
+                debug_printf("Read/write access\n");
+                //bpts[i].size
 
-						cnt++;
+                if (dabr_is_set == false)
+                {
+                    SNPS3ProcessStop(TargetID, ProcessID);
 
-					} else {
+                    SNPS3SetDABR(TargetID, ProcessID, bpts[i].ea | 7);
 
-						msg("It's possible to set a single hardware breakpoint, DABR 0x%X is not set\n", bpts[i].ea);
-						bpts[i].code = BPT_TOO_MANY;
-					}
-				}
-				break;
+                    debug_printf("DABR: 0x%X\n", bpts[i].ea | 7);
 
-			default:
-				debug_printf("Unsupported BP type !\n");
-		}
-	}
+                    SNPS3ProcessContinue(TargetID, ProcessID);
 
-	for(i = 0; i < ndel; i++) {
+                    dabr_addr = bpts[i].ea;
 
-		debug_printf("del_bpt: type: %d, ea: 0x%X, code: %d\n", bpts[nadd + i].type, bpts[nadd + i].ea, bpts[nadd + i].code);
+                    dabr_type = 7;
 
-		bpts[nadd + i].code = BPT_OK;
-		cnt++;
+                    dabr_is_set = true;
 
-		switch(bpts[nadd + i].type)
-		{
-			case BPT_SOFT:
-				{
-					debug_printf("Software breakpoint\n");
+                    bpts[i].code = BPT_OK;
 
-					bpts[nadd + i].orgbytes.pop_back();
+                    cnt++;
 
-					SNPS3ClearBreakPoint(TargetID, PS3_UI_CPU, ProcessID, -1, bpts[nadd + i].ea);
-					
-					it = std::find(main_bpts.begin(), main_bpts.end(), bpts[nadd + i].ea);
+                } else {
 
-					main_bpts.erase(it);
+                    msg("It's possible to set a single hardware breakpoint, DABR 0x%X is not set\n", bpts[i].ea);
+                    bpts[i].code = BPT_TOO_MANY;
+                }
+            }
+            break;
 
-					main_bpts_map.erase(bpts[nadd + i].ea);
-				}
-				break;
+        default:
+            debug_printf("Unsupported BP type !\n");
+        }
+    }
 
-			case BPT_WRITE:
-			case BPT_RDWR:
-				{
-					if (bpts[nadd + i].type == BPT_RDWR)
-					{
-						debug_printf("Read/write access\n");
+    for (i = 0; i < ndel; i++)
+    {
+        debug_printf("del_bpt: type: %d, ea: 0x%X, code: %d\n", bpts[nadd + i].type, bpts[nadd + i].ea, bpts[nadd + i].code);
 
-					} else {
+        bpts[nadd + i].code = BPT_OK;
+        cnt++;
 
-						debug_printf("Write access\n");
-					}
+        switch(bpts[nadd + i].type)
+        {
+        case BPT_SOFT:
+            {
+                debug_printf("Software breakpoint\n");
 
-					dabr_is_set = false;
+                bpts[nadd + i].orgbytes.qclear();
 
-					dabr_addr = 0;
+                SNPS3ClearBreakPoint(TargetID, PS3_UI_CPU, ProcessID, -1, bpts[nadd + i].ea);
 
-					SNPS3ProcessStop(TargetID, ProcessID);
-					
-					SNPS3SetDABR(TargetID, ProcessID, bpts[nadd + i].ea | 4);
-					
-					debug_printf("DABR: 0x%X\n", bpts[nadd + i].ea | 4);
+                main_bpts.erase(bpts[nadd + i].ea);
 
-					SNPS3ProcessContinue(TargetID, ProcessID);
-				}
-				break;
-		}
-	}
+                main_bpts_map.erase(bpts[nadd + i].ea);
+            }
+            break;
 
-	//SNPS3GetBreakPoints(TargetID, PS3_UI_CPU, ProcessID, -1, &BPCount, NULL);
-	//debug_printf("BreakPoints sum: %d\n", BPCount);
+        case BPT_WRITE:
+        case BPT_RDWR:
+            {
+                if (bpts[nadd + i].type == BPT_RDWR)
+                {
+                    debug_printf("Read/write access\n");
 
-	//bp_list();
+                } else {
 
-	return cnt;
+                    debug_printf("Write access\n");
+                }
+
+                dabr_is_set = false;
+
+                dabr_addr = 0;
+
+                SNPS3ProcessStop(TargetID, ProcessID);
+
+                SNPS3SetDABR(TargetID, ProcessID, bpts[nadd + i].ea | 4);
+
+                debug_printf("DABR: 0x%X\n", bpts[nadd + i].ea | 4);
+
+                SNPS3ProcessContinue(TargetID, ProcessID);
+            }
+            break;
+        }
+    }
+
+    //SNPS3GetBreakPoints(TargetID, PS3_UI_CPU, ProcessID, -1, &BPCount, NULL);
+    //debug_printf("BreakPoints sum: %d\n", BPCount);
+
+    //bp_list();
+
+    return cnt;
 }
 
 //--------------------------------------------------------------------------
@@ -2623,64 +2541,64 @@ int idaapi send_ioctl(int fn, const void *buf, size_t size, void **poutbuf, ssiz
 //--------------------------------------------------------------------------
 debugger_t debugger =
 {
-  IDD_INTERFACE_VERSION,
-  DEBUGGER_NAME,				// Short debugger name
-  DEBUGGER_ID_PLAYSTATION_3,	// Debugger API module id
-  PROCESSOR_NAME,				// Required processor name
-  DBG_FLAG_REMOTE | DBG_FLAG_NOHOST | DBG_FLAG_CAN_CONT_BPT,
+    IDD_INTERFACE_VERSION,
+    DEBUGGER_NAME,				// Short debugger name
+    DEBUGGER_ID_PLAYSTATION_3,	// Debugger API module id
+    PROCESSOR_NAME,				// Required processor name
+    DBG_FLAG_REMOTE | DBG_FLAG_NOHOST | DBG_FLAG_CAN_CONT_BPT,
 
-  register_classes,				// Array of register class names
-  RC_GENERAL,					// Mask of default printed register classes
-  registers,					// Array of registers
-  qnumber(registers),			// Number of registers
+    register_classes,				// Array of register class names
+    RC_GENERAL,					// Mask of default printed register classes
+    registers,					// Array of registers
+    qnumber(registers),			// Number of registers
 
-  0x1000,						// Size of a memory page
+    0x1000,						// Size of a memory page
 
-  bpt_code,						// Array of bytes for a breakpoint instruction
-  qnumber(bpt_code),			// Size of this array
-  0,							// for miniidbs: use this value for the file type after attaching
-  0,							// reserved
+    bpt_code,						// Array of bytes for a breakpoint instruction
+    qnumber(bpt_code),			// Size of this array
+    0,							// for miniidbs: use this value for the file type after attaching
+    0,							// reserved
 
-  init_debugger,
-  term_debugger,
+    init_debugger,
+    term_debugger,
 
-  process_get_info,
-  deci3_start_process,
-  deci3_attach_process,
-  deci3_detach_process,
-  rebase_if_required_to,
-  prepare_to_pause_process,
-  deci3_exit_process,
+    process_get_info,
+    deci3_start_process,
+    deci3_attach_process,
+    deci3_detach_process,
+    rebase_if_required_to,
+    prepare_to_pause_process,
+    deci3_exit_process,
 
-  get_debug_event,
-  continue_after_event,
-  NULL, //set_exception_info,
-  stopped_at_debug_event,
+    get_debug_event,
+    continue_after_event,
+    NULL, //set_exception_info,
+    stopped_at_debug_event,
 
-  thread_suspend,
-  thread_continue,
-  thread_set_step,
-  read_registers,
-  write_register,
-  NULL, //thread_get_sreg_base
+    thread_suspend,
+    thread_continue,
+    thread_set_step,
+    read_registers,
+    write_register,
+    NULL, //thread_get_sreg_base
 
-  get_memory_info,
-  read_memory,
-  write_memory,
+    get_memory_info,
+    read_memory,
+    write_memory,
 
-  is_ok_bpt,
-  update_bpts,
-  NULL, //update_lowcnds
-  NULL, //open_file
-  NULL, //close_file
-  NULL, //read_file
-  map_address,
-  NULL, //set_dbg_options
-  NULL, //get_debmod_extensions
-  NULL, //update_call_stack
-  NULL, //appcall
-  NULL, //cleanup_appcall
-  NULL, //eval_lowcnd
-  NULL, //write_file
-  send_ioctl,
+    is_ok_bpt,
+    update_bpts,
+    NULL, //update_lowcnds
+    NULL, //open_file
+    NULL, //close_file
+    NULL, //read_file
+    map_address,
+    NULL, //set_dbg_options
+    NULL, //get_debmod_extensions
+    NULL, //update_call_stack
+    NULL, //appcall
+    NULL, //cleanup_appcall
+    NULL, //eval_lowcnd
+    NULL, //write_file
+    send_ioctl,
 };
