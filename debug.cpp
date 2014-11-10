@@ -89,7 +89,7 @@ static const unsigned char bpt_code[] = {0x7f, 0xe0, 0x00, 0x08};
 
 #define RC_GENERAL 1
 #define RC_FLOAT   2
-//#define RC_VECTOR  3
+//#define RC_VECTOR  4
 
 struct regval
 {
@@ -2153,21 +2153,23 @@ int idaapi read_registers(thid_t tid, int clsmask, regval_t *values)
 	{
 		debug_printf("read_registers -> SNPS3ThreadGetRegisters Error: %d\n", snr);
 		return 1;
-
-	} else {
-
-		for(int i=0;i<qnumber(registers_id);i++) {
-
-			if (clsmask == RC_GENERAL || clsmask == RC_FLOAT)
+	}
+    else
+    {
+		for(int i = 0; i < qnumber(registers_id); i++)
+        {
+			if (((clsmask & RC_GENERAL) != 0) || ((clsmask & RC_FLOAT) != 0))
 			{
 				values[i].ival = bswap64(RegsBuf[i].lval);
 
 				if (i == 33) // CR
 				{
+                    debug_printf("read_registers -> condition register: %16X\n", values[i].ival);
 					values[i].ival = (values[i].ival << 32) | (values[i].ival >> 32);
 				}
-
-			} else {
+			}
+            //if ((clsmask & RC_VECTOR) != 0)
+            {
 				//for ( int i=R_XMM0; i < R_MXCSR; i++,xptr+=16 )
 				//  values[i].set_bytes(xptr, 16);
 			}
