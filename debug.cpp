@@ -54,6 +54,7 @@ uint32 read_pc_register(uint32 tid);
 uint32 read_lr_register(uint32 tid);
 uint32 read_ctr_register(uint32 tid);
 int do_step(uint32 tid, uint32 dbg_notification);
+int remove_thread_bpts(uint32 tid, const std::set<uint32> & bpts);
 
 static const char idc_threadlst_args[] = {0};
 
@@ -61,6 +62,7 @@ std::vector<SNPS3TargetInfo*> Targets;
 std::string TargetName;
 HTARGET TargetID;
 uint32 ProcessID;
+uint32 ThreadID = 0;
 
 bool LaunchTargetPicker = true;
 bool AlwaysDC = false;
@@ -91,7 +93,7 @@ static const unsigned char bpt_code[] = {0x7f, 0xe0, 0x00, 0x08};
 
 #define RC_GENERAL 1
 #define RC_FLOAT   2
-//#define RC_VECTOR  4
+#define RC_VECTOR  4
 
 struct regval
 {
@@ -105,7 +107,7 @@ const char* register_classes[] =
 {
   "General registers",
   "Floating point registers",
-  /*"Velocity Engine/VMX/AltiVec", // 128-bit Vector Registers*/
+  "Velocity Engine/VMX/AltiVec", // 128-bit Vector Registers
   NULL
 };
 
@@ -179,227 +181,229 @@ static const char *const CReg[] =
 
 static const char *const vmx_format[] =
 {
-  "VMX 128 bit",
+    "vmx_4_words",
+    NULL,
 };
 
 //--------------------------------------------------------------------------
 register_info_t registers[] =
 {
-  { "r0",     REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r1",     REGISTER_ADDRESS | REGISTER_SP, RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r2",     REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r3",     REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r4",     REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r5",     REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r6",     REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r7",     REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r8",     REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r9",     REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r10",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r11",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r12",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r13",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r14",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r15",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r16",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r17",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r18",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r19",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r20",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r21",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r22",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r23",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r24",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r25",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r26",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r27",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r28",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r29",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r30",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "r31",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-																	  
-  { "PC",     REGISTER_ADDRESS | REGISTER_IP, RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "CR",     NULL,							  RC_GENERAL,  dt_qword,  CReg,   0xFFFFFFFF },
-  //{ "CR",     NULL,							  RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "LR",     REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-  { "CTR",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
-																	  
-  { "f0",     NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f1",     NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f2",     NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f3",     NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f4",     NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f5",     NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f6",     NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f7",     NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f8",     NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f9",     NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f10",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f11",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f12",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f13",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f14",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f15",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f16",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f17",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f18",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f19",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f20",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f21",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f22",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f23",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f24",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f25",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f26",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f27",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f28",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f29",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f30",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
-  { "f31",    NULL,							  RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "r0",     REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r1",     REGISTER_ADDRESS | REGISTER_SP, RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r2",     REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r3",     REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r4",     REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r5",     REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r6",     REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r7",     REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r8",     REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r9",     REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r10",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r11",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r12",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r13",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r14",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r15",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r16",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r17",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r18",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r19",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r20",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r21",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r22",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r23",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r24",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r25",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r26",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r27",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r28",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r29",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r30",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "r31",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
 
-  /*{ "v0",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v1",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v2",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v3",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v4",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v5",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v6",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v7",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v8",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v9",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v10",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v11",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v12",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v13",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v14",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v15",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v16",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v17",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v18",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v19",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v20",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v21",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v22",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v23",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v24",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v25",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v26",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v27",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v28",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v29",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v30",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
-  { "v31",	  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 }*/
+    { "PC",     REGISTER_ADDRESS | REGISTER_IP, RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "CR",     NULL,							RC_GENERAL,  dt_qword,  CReg,   0xFFFFFFFF },
+    //{ "CR",     NULL,							  RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "LR",     REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+    { "CTR",    REGISTER_ADDRESS,               RC_GENERAL,  dt_qword,  NULL,   0 },
+
+    { "f0",     NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f1",     NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f2",     NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f3",     NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f4",     NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f5",     NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f6",     NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f7",     NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f8",     NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f9",     NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f10",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f11",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f12",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f13",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f14",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f15",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f16",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f17",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f18",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f19",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f20",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f21",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f22",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f23",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f24",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f25",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f26",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f27",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f28",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f29",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f30",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+    { "f31",    NULL,							RC_FLOAT,    dt_qword,  NULL,   0 },
+
+    { "vr0",   REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr1",   REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr2",   REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr3",   REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr4",   REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr5",   REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr6",   REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr7",   REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr8",   REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr9",   REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr10",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr11",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr12",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr13",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr14",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr15",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr16",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr17",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr18",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr19",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr20",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr21",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr22",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr23",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr24",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr25",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr26",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr27",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr28",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr29",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr30",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 },
+    { "vr31",  REGISTER_CUSTFMT,				  RC_VECTOR,   dt_byte16, vmx_format,   0 }
 };
 
-uint32 registers_id[68] = {
-	SNPS3_gpr_0,
-	SNPS3_gpr_1,
-	SNPS3_gpr_2,	
-	SNPS3_gpr_3,	
-	SNPS3_gpr_4,	
-	SNPS3_gpr_5,	
-	SNPS3_gpr_6,	
-	SNPS3_gpr_7,	
-	SNPS3_gpr_8,	
-	SNPS3_gpr_9,	
-	SNPS3_gpr_10,
-	SNPS3_gpr_11,
-	SNPS3_gpr_12,
-	SNPS3_gpr_13,
-	SNPS3_gpr_14,
-	SNPS3_gpr_15,
-	SNPS3_gpr_16,
-	SNPS3_gpr_17,
-	SNPS3_gpr_18,
-	SNPS3_gpr_19,
-	SNPS3_gpr_20,
-	SNPS3_gpr_21,
-	SNPS3_gpr_22,
-	SNPS3_gpr_23,
-	SNPS3_gpr_24,
-	SNPS3_gpr_25,
-	SNPS3_gpr_26,
-	SNPS3_gpr_27,
-	SNPS3_gpr_28,
-	SNPS3_gpr_29,
-	SNPS3_gpr_30,
-	SNPS3_gpr_31,
+uint32 registers_id[] =
+{
+    SNPS3_gpr_0,
+    SNPS3_gpr_1,
+    SNPS3_gpr_2,	
+    SNPS3_gpr_3,	
+    SNPS3_gpr_4,	
+    SNPS3_gpr_5,	
+    SNPS3_gpr_6,	
+    SNPS3_gpr_7,	
+    SNPS3_gpr_8,	
+    SNPS3_gpr_9,	
+    SNPS3_gpr_10,
+    SNPS3_gpr_11,
+    SNPS3_gpr_12,
+    SNPS3_gpr_13,
+    SNPS3_gpr_14,
+    SNPS3_gpr_15,
+    SNPS3_gpr_16,
+    SNPS3_gpr_17,
+    SNPS3_gpr_18,
+    SNPS3_gpr_19,
+    SNPS3_gpr_20,
+    SNPS3_gpr_21,
+    SNPS3_gpr_22,
+    SNPS3_gpr_23,
+    SNPS3_gpr_24,
+    SNPS3_gpr_25,
+    SNPS3_gpr_26,
+    SNPS3_gpr_27,
+    SNPS3_gpr_28,
+    SNPS3_gpr_29,
+    SNPS3_gpr_30,
+    SNPS3_gpr_31,
 
-	SNPS3_pc,
-	SNPS3_cr,
-	SNPS3_lr,
-	SNPS3_ctr,
-	//SNPS3_xer		// "XER"
-	//SNPS3_fpscr	// "fpscr"
-	//SNPS3_vscr	// "vscr"
-	//SNPS3_vrsave  // "vrsave"
-	//SNPS3_msr		// "msr"
+    SNPS3_pc,
+    SNPS3_cr,
+    SNPS3_lr,
+    SNPS3_ctr,
+    //SNPS3_xer		// "XER"
+    //SNPS3_fpscr	// "fpscr"
+    //SNPS3_vscr	// "vscr"
+    //SNPS3_vrsave  // "vrsave"
+    //SNPS3_msr		// "msr"
 
-	SNPS3_fpr_0,
-	SNPS3_fpr_1,
-	SNPS3_fpr_2,
-	SNPS3_fpr_3,
-	SNPS3_fpr_4,
-	SNPS3_fpr_5,
-	SNPS3_fpr_6,
-	SNPS3_fpr_7,
-	SNPS3_fpr_8,
-	SNPS3_fpr_9,
-	SNPS3_fpr_10,
-	SNPS3_fpr_11,
-	SNPS3_fpr_12,
-	SNPS3_fpr_13,
-	SNPS3_fpr_14,
-	SNPS3_fpr_15,
-	SNPS3_fpr_16,
-	SNPS3_fpr_17,
-	SNPS3_fpr_18,
-	SNPS3_fpr_19,
-	SNPS3_fpr_20,
-	SNPS3_fpr_21,
-	SNPS3_fpr_22,
-	SNPS3_fpr_23,
-	SNPS3_fpr_24,
-	SNPS3_fpr_25,
-	SNPS3_fpr_26,
-	SNPS3_fpr_27,
-	SNPS3_fpr_28,
-	SNPS3_fpr_29,
-	SNPS3_fpr_30,
-	SNPS3_fpr_31,
+    SNPS3_fpr_0,
+    SNPS3_fpr_1,
+    SNPS3_fpr_2,
+    SNPS3_fpr_3,
+    SNPS3_fpr_4,
+    SNPS3_fpr_5,
+    SNPS3_fpr_6,
+    SNPS3_fpr_7,
+    SNPS3_fpr_8,
+    SNPS3_fpr_9,
+    SNPS3_fpr_10,
+    SNPS3_fpr_11,
+    SNPS3_fpr_12,
+    SNPS3_fpr_13,
+    SNPS3_fpr_14,
+    SNPS3_fpr_15,
+    SNPS3_fpr_16,
+    SNPS3_fpr_17,
+    SNPS3_fpr_18,
+    SNPS3_fpr_19,
+    SNPS3_fpr_20,
+    SNPS3_fpr_21,
+    SNPS3_fpr_22,
+    SNPS3_fpr_23,
+    SNPS3_fpr_24,
+    SNPS3_fpr_25,
+    SNPS3_fpr_26,
+    SNPS3_fpr_27,
+    SNPS3_fpr_28,
+    SNPS3_fpr_29,
+    SNPS3_fpr_30,
+    SNPS3_fpr_31,
 
-	/*SNPS3_vmx_0,
-	SNPS3_vmx_1,
-	SNPS3_vmx_2,
-	SNPS3_vmx_3,
-	SNPS3_vmx_4,
-	SNPS3_vmx_5,
-	SNPS3_vmx_6,
-	SNPS3_vmx_7,
-	SNPS3_vmx_8,
-	SNPS3_vmx_9,
-	SNPS3_vmx_10,
-	SNPS3_vmx_11,
-	SNPS3_vmx_12,
-	SNPS3_vmx_13,
-	SNPS3_vmx_14,
-	SNPS3_vmx_15,
-	SNPS3_vmx_16,
-	SNPS3_vmx_17,
-	SNPS3_vmx_18,
-	SNPS3_vmx_19,
-	SNPS3_vmx_20,
-	SNPS3_vmx_21,
-	SNPS3_vmx_22,
-	SNPS3_vmx_23,
-	SNPS3_vmx_24,
-	SNPS3_vmx_25,
-	SNPS3_vmx_26,
-	SNPS3_vmx_27,
-	SNPS3_vmx_28,
-	SNPS3_vmx_29,
-	SNPS3_vmx_30,
-	SNPS3_vmx_31*/
+    SNPS3_vmx_0,
+    SNPS3_vmx_1,
+    SNPS3_vmx_2,
+    SNPS3_vmx_3,
+    SNPS3_vmx_4,
+    SNPS3_vmx_5,
+    SNPS3_vmx_6,
+    SNPS3_vmx_7,
+    SNPS3_vmx_8,
+    SNPS3_vmx_9,
+    SNPS3_vmx_10,
+    SNPS3_vmx_11,
+    SNPS3_vmx_12,
+    SNPS3_vmx_13,
+    SNPS3_vmx_14,
+    SNPS3_vmx_15,
+    SNPS3_vmx_16,
+    SNPS3_vmx_17,
+    SNPS3_vmx_18,
+    SNPS3_vmx_19,
+    SNPS3_vmx_20,
+    SNPS3_vmx_21,
+    SNPS3_vmx_22,
+    SNPS3_vmx_23,
+    SNPS3_vmx_24,
+    SNPS3_vmx_25,
+    SNPS3_vmx_26,
+    SNPS3_vmx_27,
+    SNPS3_vmx_28,
+    SNPS3_vmx_29,
+    SNPS3_vmx_30,
+    SNPS3_vmx_31
 };
 
 //-------------------------------------------------------------------------
@@ -823,28 +827,13 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 				ev.handled = true;
 				ev.exc.code = 0;
 				ev.exc.can_cont = true;
+                ev.bpt.hea = BADADDR;
+                ev.bpt.kea = BADADDR;
 				ev.exc.ea = BADADDR;
 
 				events.enqueue(ev, IN_BACK);
 
-                for (std::set<uint32>::const_iterator step_it = step_bpts.begin(); step_it != step_bpts.end(); ++step_it)
-				{
-                    addr = *step_it;
-
-                    if (main_bpts.end() == main_bpts.find(addr))
-                    {
-						main_bpts_map.erase(addr);
-
-						if (SN_FAILED( snr = SNPS3ClearBreakPoint(TargetID, PS3_UI_CPU, ProcessID, bswap64(pDbgData->ppu_exc_trap.uPPUThreadID), addr)))
-						{
-							msg("SNPS3ClearBreakPoint Error: %d\n", snr);
-
-						} else {
-
-							debug_printf("step bpt cleared\n");
-						}
-					}
-				}
+                remove_thread_bpts(bswap64(pDbgData->ppu_exc_trap.uPPUThreadID), step_bpts);
                 step_bpts.clear();
 
 				if (continue_from_bp == true)
@@ -1221,6 +1210,8 @@ static void __stdcall TargetEventCallback(HTARGET hTarget, uint uEventType, uint
 // Initialize debugger
 static bool idaapi init_debugger(const char *hostname, int port_num, const char *password)
 {
+    debug_printf("init_debugger\n");
+
 	SNRESULT snr = SN_S_OK;
 
 	if (SN_FAILED( snr = SNPS3InitTargetComms() ))
@@ -1246,6 +1237,8 @@ static bool idaapi init_debugger(const char *hostname, int port_num, const char 
 // Terminate debugger
 static bool idaapi term_debugger(void)
 {
+    debug_printf("term_debugger\n");
+
 	// Do post stuff like disconnecting from target
 	if (AlwaysDC || (!WasOriginallyConnected))
 	{
@@ -1267,6 +1260,8 @@ static bool idaapi term_debugger(void)
 //--------------------------------------------------------------------------
 int idaapi process_get_info(int n, process_info_t *info)
 {
+    debug_printf("process_get_info\n");
+
 	uint32 NumProcesses;
 	uint32* ProcessesList;
 	SNPS3PROCESSINFO* ProcessesInfo;
@@ -1339,6 +1334,8 @@ static error_t idaapi idc_threadlst(idc_value_t *argv, idc_value_t *res)
 
 void get_threads_info(void)
 {
+    debug_printf("get_threads_info\n");
+
 	uint32 NumPPUThreads;
 	uint32 NumSPUThreadGroups;
 	uint64 *PPUThreadIDs;
@@ -1359,16 +1356,16 @@ void get_threads_info(void)
 
 	//debug_printf(" === PPU THREAD INFO === \n");
 
-	for(uint32 i=0;i<NumPPUThreads;i++) {
-
+	for(uint32 i=0;i<NumPPUThreads;i++)
+    {
 		ThreadInfoSize = 1024;
 
 		if (SN_FAILED( snr = SNPS3ThreadInfo(TargetID, PS3_UI_CPU, ProcessID, PPUThreadIDs[i], &ThreadInfoSize, (byte *)ThreadInfo)))
 		{
 			msg("SNPS3ThreadInfo Error: %d\n", snr);
-
-		} else {
-
+		}
+        else
+        {
 			msg("[%d] ThreadID: 0x%llX, State: %s, Name: %s\n", i, ThreadInfo->uThreadID, get_state_name(ThreadInfo->uState), (const char*)(ThreadInfo + 1));
 
 			if (attaching == true) 
@@ -1387,6 +1384,12 @@ void get_threads_info(void)
 				{
 					//suspend_thread(ThreadInfo->uThreadID);
 				}
+
+                if (stristr((const char*)(ThreadInfo + 1), "eboot.bin"))
+                {
+                    ThreadID = (uint32)ThreadInfo->uThreadID;
+                    msg("Main thread found.\n");
+                }
 			}
 		}
 	}
@@ -1746,6 +1749,10 @@ gdecode_t idaapi get_debug_event(debug_event_t *event, int ida_is_idle)
 
 	while ( true )
 	{
+        memset(&target_event, 0, 0x20);
+
+        Kick();
+
 		if ( events.retrieve(event) )
 		{
 
@@ -1769,24 +1776,13 @@ gdecode_t idaapi get_debug_event(debug_event_t *event, int ida_is_idle)
 
 			if (attaching == false) 
 			{
-				memset(&target_event, 0, 0x20);
-
-				Kick();
 			}
 
-			return GDE_ONE_EVENT;
+			return (events.empty()) ? GDE_ONE_EVENT : GDE_MANY_EVENTS;
 		}
 
 		if (events.empty())
 			break;
-
-	};
-
-	if (attaching == false)
-	{
-		memset(&target_event, 0, 0x20);
-
-		Kick();
 	}
 
 	return GDE_NO_EVENT;
@@ -1795,6 +1791,87 @@ gdecode_t idaapi get_debug_event(debug_event_t *event, int ida_is_idle)
 //--------------------------------------------------------------------------
 // Continue after handling the event
 int idaapi continue_after_event(const debug_event_t *event)
+{
+    if ( event == NULL )
+        return false;
+
+#ifdef _DEBUG
+
+    if (event->eid == BREAKPOINT && event->bpt.hea != BADADDR)
+    {
+        debug_printf("continue_after_event: BREAKPOINT (HW)\n");
+
+    } else {
+
+        debug_printf("continue_after_event: %s\n", get_event_name(event->eid));
+    }
+
+#endif
+
+    if ( !events.empty() )
+        return true;
+
+    if (event->eid == PROCESS_ATTACH || event->eid == PROCESS_SUSPEND || event->eid == STEP || event->eid == BREAKPOINT)
+    {
+        std::set<uint32> orig_bpts;
+        std::set<uint32> dabr_bpts;
+
+        if (BREAKPOINT == event->eid)
+        {
+            if (addr_has_bp(event->ea))
+            {
+                continue_from_bp = true;
+
+                SNPS3ClearBreakPoint(TargetID, PS3_UI_CPU, ProcessID, -1, event->ea);
+            }
+
+            if (event->bpt.hea == dabr_addr)
+            {
+                SNPS3SetDABR(TargetID, ProcessID, dabr_addr | 4);
+
+                orig_bpts = step_bpts;
+
+                do_step(event->tid, 0);
+
+                dabr_bpts = step_bpts;
+                for (std::set<uint32>::const_iterator bpt_it = orig_bpts.begin(); bpt_it != orig_bpts.end(); ++bpt_it)
+                {
+                    uint32 addr = *bpt_it;
+                    dabr_bpts.erase(addr);
+                }
+            }
+        }
+
+        SNPS3ProcessContinue(TargetID, ProcessID);
+
+        if (BREAKPOINT == event->eid)
+        {
+            if (continue_from_bp)
+            {
+                SNPS3SetBreakPoint(TargetID, PS3_UI_CPU, ProcessID, -1, event->ea);
+            }
+
+            if (event->bpt.hea == dabr_addr)
+            {
+                Kick();
+
+                SNPS3SetDABR(TargetID, ProcessID, dabr_addr | dabr_type);
+
+                remove_thread_bpts(event->tid, dabr_bpts);
+
+                SNPS3ProcessContinue(TargetID, ProcessID);
+            }
+        }
+    }
+
+    memset(&target_event, 0, 0x20);
+
+    return true;
+}
+
+//--------------------------------------------------------------------------
+// Continue after handling the event
+int idaapi continue_after_event_old(const debug_event_t *event)
 {
 	if ( event == NULL )
 		return false;
@@ -1897,8 +1974,35 @@ int idaapi thread_continue(thid_t tid)
 #define G_STR_SIZE 256
 
 //-------------------------------------------------------------------------
+int remove_thread_bpts(uint32 tid, const std::set<uint32> & bpts)
+{
+    for (std::set<uint32>::const_iterator bpt_it = bpts.begin(); bpt_it != bpts.end(); ++bpt_it)
+    {
+        uint32 addr = *bpt_it;
+
+        if (main_bpts.end() == main_bpts.find(addr))
+        {
+            main_bpts_map.erase(addr);
+
+            SNRESULT snr = SN_S_OK;
+            if (SN_FAILED( snr = SNPS3ClearBreakPoint(TargetID, PS3_UI_CPU, ProcessID, tid, addr)))
+            {
+                msg("SNPS3ClearBreakPoint Error: %d - 0x%08X\n", (uint32)snr, (uint32)addr);
+            }
+            else
+            {
+                debug_printf("thread bpt cleared: 0x%08X\n", (uint32)addr);
+            }
+        }
+    }
+
+    return 1;
+}
+
 int do_step(uint32 tid, uint32 dbg_notification)
 {
+    debug_printf("do_step\n");
+
     char mnem[G_STR_SIZE] = {0};
 
 	ea_t ea = read_pc_register(tid);
@@ -1975,9 +2079,8 @@ int do_step(uint32 tid, uint32 dbg_notification)
         step_bpts.insert(next_addr);
     }
 
-    if (BADADDR != resolved_addr)
+    if (BADADDR != resolved_addr && (STEP_OVER != dbg_notification))
     {
-
         SNPS3ProcessGetMemory(TargetID, PS3_UI_CPU, ProcessID, -1, resolved_addr, 4, (byte *)&instruction);
         if (instruction != *(uint32*)bpt_code)
             main_bpts_map[resolved_addr] = instruction;
@@ -1993,12 +2096,15 @@ int do_step(uint32 tid, uint32 dbg_notification)
 // Run one instruction in the thread
 int idaapi thread_set_step(thid_t tid)
 {
+    debug_printf("thread_set_step\n");
+
 	int dbg_notification;
 	int result = 0;
 
 	dbg_notification = get_running_notification();
 
-	if (dbg_notification == STEP_INTO || dbg_notification == STEP_OVER) {
+	if (dbg_notification == STEP_INTO || dbg_notification == STEP_OVER)
+    {
 		result = do_step(tid, dbg_notification);
 		singlestep = true;
 	}
@@ -2056,10 +2162,12 @@ uint32 read_ctr_register(uint32 tid)
 // Read thread registers
 int idaapi read_registers(thid_t tid, int clsmask, regval_t *values)
 {
+    debug_printf("read_registers\n");
+
 	SNRESULT snr = SN_S_OK;
 	regval *RegsBuf;
 
-	if ( values == NULL ) 
+	if ( values == NULL )
 	{
 		debug_printf("NULL ptr detected !\n");
 		return false;
@@ -2070,27 +2178,49 @@ int idaapi read_registers(thid_t tid, int clsmask, regval_t *values)
 	if (SN_FAILED( snr = SNPS3ThreadGetRegisters(TargetID, PS3_UI_CPU, ProcessID, tid, qnumber(registers_id), registers_id, (byte *)RegsBuf)))
 	{
 		debug_printf("read_registers -> SNPS3ThreadGetRegisters Error: %d\n", snr);
-		return 1;
+		return false;
 	}
     else
     {
 		for(int i = 0; i < qnumber(registers_id); i++)
         {
-			if (((clsmask & RC_GENERAL) != 0) || ((clsmask & RC_FLOAT) != 0))
-			{
-				values[i].ival = bswap64(RegsBuf[i].lval);
-
-				if (i == 33) // CR
-				{
-                    debug_printf("read_registers -> condition register: %16X\n", values[i].ival);
-					values[i].ival = (values[i].ival << 32) | (values[i].ival >> 32);
-				}
-			}
-            //if ((clsmask & RC_VECTOR) != 0)
+            switch (registers[i].register_class)
             {
-				//for ( int i=R_XMM0; i < R_MXCSR; i++,xptr+=16 )
-				//  values[i].set_bytes(xptr, 16);
-			}
+            case RC_GENERAL:
+            case RC_FLOAT:
+                {
+                    if (((clsmask & RC_GENERAL) == registers[i].register_class) ||
+                        ((clsmask & RC_FLOAT) == registers[i].register_class))
+                    {
+                        values[i].ival = bswap64(RegsBuf[i].lval);
+
+                        if (SNPS3_cr == registers_id[i]) // CR
+                        {
+                            values[i].ival = (values[i].ival << 32) | (values[i].ival >> 32);
+                            debug_printf("read_registers -> condition register: %08llX\n", (uint64)values[i].ival);
+                        }
+                    }
+                }
+                break;
+
+            case RC_VECTOR:
+                {
+                    if ((clsmask & RC_VECTOR) != 0)
+                    {
+                        uint32* buf = (uint32*)&RegsBuf[i];
+                        uint32 reg[4] =
+                        {
+                            bswap32(buf[0]),
+                            bswap32(buf[1]),
+                            bswap32(buf[2]),
+                            bswap32(buf[3])
+                        };
+
+                        values[i].set_bytes((uchar*)reg, 16);
+                    }
+                }
+                break;
+            }
 		}
 	}
 
@@ -2101,9 +2231,11 @@ int idaapi read_registers(thid_t tid, int clsmask, regval_t *values)
 // Write one thread register
 int idaapi write_register(thid_t tid, int reg_idx, const regval_t *value)
 {
+    debug_printf("write_register\n");
+
 	SNRESULT snr = SN_S_OK;
 	uint32 reg;
-	uint64 val;
+    regval val = {0};
 
 	if ( value == NULL )
 	{
@@ -2121,7 +2253,7 @@ int idaapi write_register(thid_t tid, int reg_idx, const regval_t *value)
 
 	reg = registers_id[reg_idx];
 
-	val = bswap64(value->ival);
+	val.lval = bswap64(value->ival);
 
 	if (SN_FAILED( snr = SNPS3ThreadSetRegisters(TargetID, PS3_UI_CPU, ProcessID, tid, 1, &reg, (byte *)&val)))
 	{
@@ -2143,6 +2275,8 @@ int idaapi write_register(thid_t tid, int reg_idx, const regval_t *value)
 //    1: new memory layout is returned
 int idaapi get_memory_info(meminfo_vec_t &areas)
 {
+    debug_printf("get_memory_info\n");
+
 	/*SNRESULT snr = SN_S_OK;
 	uint32 AreaCount;
 	uint32 BufSize;
@@ -2203,6 +2337,8 @@ int idaapi get_memory_info(meminfo_vec_t &areas)
 // Read process memory
 ssize_t idaapi read_memory(ea_t ea, void *buffer, size_t size)
 {
+    debug_printf("read_memory\n");
+
 	SNPS3ProcessGetMemory(TargetID, PS3_UI_CPU, ProcessID, -1, ea, size, (byte *)buffer);
 
 	for (int i = 0; i < size; i += 4)
@@ -2220,6 +2356,8 @@ ssize_t idaapi read_memory(ea_t ea, void *buffer, size_t size)
 // Write process memory
 ssize_t idaapi write_memory(ea_t ea, const void *buffer, size_t size)
 {
+    debug_printf("write_memory\n");
+
 	SNRESULT snr = SN_S_OK;
 
 	if (SN_FAILED( snr = SNPS3ProcessSetMemory(TargetID, PS3_UI_CPU, ProcessID, -1, ea, size, (byte *)buffer)))
@@ -2234,6 +2372,8 @@ ssize_t idaapi write_memory(ea_t ea, const void *buffer, size_t size)
 //--------------------------------------------------------------------------
 int idaapi is_ok_bpt(bpttype_t type, ea_t ea, int len)
 {
+    debug_printf("is_ok_bpt\n");
+
 	switch(type)
 	{
 		case BPT_SOFT:
@@ -2333,10 +2473,17 @@ int idaapi update_bpts(update_bpt_info_t *bpts, int nadd, int ndel)
 
     //bp_list();
 
+    int state = get_thread_state(ThreadID);
+    long status;
+    SNPS3GetStatus(TargetID, PS3_UI_CPU, &status, NULL);
+    debug_printf("update_bpts - process status: %d - thread state: %s\n", (uint32)status, get_state_name(state));
+
     for (i = 0; i < nadd; i++)
     {
+        if (bpts[i].code != BPT_OK)
+            continue;
 
-        debug_printf("add_bpt: type: %d, ea: 0x%X, code: %d\n", bpts[i].type, bpts[i].ea, bpts[i].code);
+        debug_printf("add_bpt: type: %d, ea: 0x%llX, code: %d, size: %d\n", (uint32)bpts[i].type, (uint64)bpts[i].ea, (uint32)bpts[i].code, (uint32)bpts[i].size);
 
         //BPT_SKIP
 
@@ -2369,9 +2516,26 @@ int idaapi update_bpts(update_bpt_info_t *bpts, int nadd, int ndel)
         case BPT_EXEC:
             {
                 debug_printf("Execute instruction\n");
-                //bpts[i].size
 
-                bpts[i].code = BPT_BAD_TYPE;
+                SNPS3ProcessGetMemory(TargetID, PS3_UI_CPU, ProcessID, -1, bpts[i].ea, 4, (byte *)&orig_inst);
+
+                if (orig_inst != *(uint32*)bpt_code)
+                    main_bpts_map[bpts[i].ea] = orig_inst;
+
+                //debug_printf("orig_inst = 0x%X\n", bswap32(orig_inst));
+
+                bpts[i].orgbytes.qclear();
+                bpts[i].orgbytes.append(&orig_inst,  sizeof(orig_inst));
+
+                SNPS3SetBreakPoint(TargetID, PS3_UI_CPU, ProcessID, -1, bpts[i].ea);
+
+                bpts[i].code = BPT_OK;
+
+                main_bpts.insert(bpts[i].ea);
+
+                cnt++;
+
+                //bpts[i].code = BPT_BAD_TYPE;
             }
             break;
 
@@ -2388,7 +2552,8 @@ int idaapi update_bpts(update_bpt_info_t *bpts, int nadd, int ndel)
 
                     debug_printf("DABR: 0x%X\n", bpts[i].ea | 6);
 
-                    SNPS3ProcessContinue(TargetID, ProcessID);
+                    if (SNPS3_PPU_STOP != state)
+                        SNPS3ProcessContinue(TargetID, ProcessID);
 
                     dabr_addr = bpts[i].ea;
 
@@ -2423,7 +2588,8 @@ int idaapi update_bpts(update_bpt_info_t *bpts, int nadd, int ndel)
 
                     debug_printf("DABR: 0x%X\n", bpts[i].ea | 7);
 
-                    SNPS3ProcessContinue(TargetID, ProcessID);
+                    if (SNPS3_PPU_STOP != state)
+                        SNPS3ProcessContinue(TargetID, ProcessID);
 
                     dabr_addr = bpts[i].ea;
 
@@ -2471,6 +2637,20 @@ int idaapi update_bpts(update_bpt_info_t *bpts, int nadd, int ndel)
             }
             break;
 
+        case BPT_EXEC:
+            {
+                debug_printf("Execute instruction\n");
+
+                bpts[nadd + i].orgbytes.qclear();
+
+                SNPS3ClearBreakPoint(TargetID, PS3_UI_CPU, ProcessID, -1, bpts[nadd + i].ea);
+
+                main_bpts.erase(bpts[nadd + i].ea);
+
+                main_bpts_map.erase(bpts[nadd + i].ea);
+            }
+            break;
+
         case BPT_WRITE:
         case BPT_RDWR:
             {
@@ -2493,7 +2673,8 @@ int idaapi update_bpts(update_bpt_info_t *bpts, int nadd, int ndel)
 
                 debug_printf("DABR: 0x%X\n", bpts[nadd + i].ea | 4);
 
-                SNPS3ProcessContinue(TargetID, ProcessID);
+                if (SNPS3_PPU_STOP != state)
+                    SNPS3ProcessContinue(TargetID, ProcessID);
             }
             break;
         }
