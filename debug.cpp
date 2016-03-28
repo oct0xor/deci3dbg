@@ -44,7 +44,7 @@
 #endif
 
 #define DEBUGGER_NAME "deci3"
-#define DEBUGGER_ID_PLAYSTATION_3 15
+#define DEBUGGER_ID_PLAYSTATION_3 (0x8000)
 #define PROCESSOR_NAME "ppc"
 
 static error_t idaapi idc_threadlst(idc_value_t *argv, idc_value_t *res);
@@ -2216,7 +2216,6 @@ int idaapi read_registers(thid_t tid, int clsmask, regval_t *values)
     debug_printf("read_registers\n");
 
     SNRESULT snr = SN_S_OK;
-    regval *RegsBuf;
 
     if ( values == NULL )
     {
@@ -2224,9 +2223,9 @@ int idaapi read_registers(thid_t tid, int clsmask, regval_t *values)
         return false;
     }
 
-    RegsBuf = (regval *)malloc(qnumber(registers_id) * SNPS3_REGLEN);
+    std::vector<regval> RegsBuf(qnumber(registers_id) * SNPS3_REGLEN);
 
-    if (SN_FAILED( snr = SNPS3ThreadGetRegisters(TargetID, PS3_UI_CPU, ProcessID, tid, qnumber(registers_id), registers_id, (byte *)RegsBuf)))
+    if (SN_FAILED( snr = SNPS3ThreadGetRegisters(TargetID, PS3_UI_CPU, ProcessID, tid, qnumber(registers_id), registers_id, (byte *)RegsBuf.data())))
     {
         debug_printf("read_registers -> SNPS3ThreadGetRegisters Error: %d\n", snr);
         return false;
