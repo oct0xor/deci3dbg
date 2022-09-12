@@ -17,6 +17,7 @@
 #include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <string.h>
 
 #include <iostream>
 #include <algorithm>
@@ -25,7 +26,6 @@
 #include <unordered_map>
 
 #include <ida.hpp>
-#include <area.hpp>
 #include <ua.hpp>
 #include <nalt.hpp>
 #include <idd.hpp>
@@ -33,7 +33,7 @@
 #include <dbg.hpp>
 
 #include "debmod.h"
-#include "include\ps3tmapi.h"
+#include <ps3tmapi.h>
 
 #ifdef _DEBUG
 #define debug_printf msg
@@ -789,12 +789,11 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 		{
 			debug_printf("SNPS3_DBG_EVENT_PROCESS_EXIT\n");
 
-			ev.eid     = PROCESS_EXIT;
 			ev.pid     = ProcessID;
 			ev.tid     = NO_THREAD;
 			ev.ea      = BADADDR;
 			ev.handled = true;
-			ev.exit_code = bswap64(pDbgData->ppu_process_exit.uExitCode);
+			ev.set_exit_code(PROCESS_EXITED, bswap64(pDbgData->ppu_process_exit.uExitCode));
 
 			events.enqueue(ev, IN_BACK);
 
@@ -815,14 +814,11 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 				uint32 addr;
 				std::vector<uint32>::iterator it;
 
-				ev.eid     = STEP;
+				ev.set_eid(STEP);
 				ev.pid     = ProcessID;
 				ev.tid     = bswap64(pDbgData->ppu_exc_trap.uPPUThreadID);
 				ev.ea      = bswap64(pDbgData->ppu_exc_trap.uPC);
 				ev.handled = true;
-				ev.exc.code = 0;
-				ev.exc.can_cont = true;
-				ev.exc.ea = BADADDR;
 
 				events.enqueue(ev, IN_BACK);
 
@@ -857,14 +853,11 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 
 			} else {
 
-				ev.eid     = BREAKPOINT;
 				ev.pid     = ProcessID;
 				ev.tid     = bswap64(pDbgData->ppu_exc_trap.uPPUThreadID);
 				ev.ea      = bswap64(pDbgData->ppu_exc_trap.uPC);
 				ev.handled = true;
-				ev.bpt.hea = BADADDR;
-				ev.bpt.kea = BADADDR;
-				ev.exc.ea  = BADADDR;
+				ev.set_bpt();
 
 				events.enqueue(ev, IN_BACK);
 
@@ -877,16 +870,17 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 			debug_printf("SNPS3_DBG_EVENT_PPU_EXP_PREV_INT\n");
 			debug_printf("ThreadID = 0x%llX, PC = 0x%llX\n", bswap64(pDbgData->ppu_exc_prev_int.uPPUThreadID), bswap64(pDbgData->ppu_exc_prev_int.uPC));
 
-			ev.eid     = EXCEPTION;
 			ev.pid     = ProcessID;
 			ev.tid     = bswap64(pDbgData->ppu_exc_prev_int.uPPUThreadID);
 			ev.ea      = BADADDR;
 			ev.handled = true;
-			ev.exc.code = 0;
-			ev.exc.can_cont = false;
-			ev.exc.ea = bswap64(pDbgData->ppu_exc_prev_int.uPC);
-			qstrncpy(ev.exc.info, "privilege instruction", sizeof(ev.exc.info));
 
+			struct excinfo_t exc = ev.set_exception();
+			exc.code = 0;
+			exc.can_cont = false;
+			exc.ea = bswap64(pDbgData->ppu_exc_prev_int.uPC);
+			exc.info = "privilege instruction";
+			
 			events.enqueue(ev, IN_BACK);
 
 		}
@@ -897,15 +891,16 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 			debug_printf("SNPS3_DBG_EVENT_PPU_EXP_ALIGNMENT\n");
 			debug_printf("ThreadID = 0x%llX, PC = 0x%llX\n", bswap64(pDbgData->ppu_exc_alignment.uPPUThreadID), bswap64(pDbgData->ppu_exc_alignment.uPC));
 
-			ev.eid     = EXCEPTION;
 			ev.pid     = ProcessID;
 			ev.tid     = bswap64(pDbgData->ppu_exc_alignment.uPPUThreadID);
 			ev.ea      = BADADDR;
 			ev.handled = true;
-			ev.exc.code = 0;
-			ev.exc.can_cont = false;
-			ev.exc.ea = bswap64(pDbgData->ppu_exc_alignment.uPC);
-			qstrncpy(ev.exc.info, "alignment interrupt", sizeof(ev.exc.info));
+			struct excinfo_t exc = ev.set_exception();
+
+			exc.code = 0;
+			exc.can_cont = false;
+			exc.ea = bswap64(pDbgData->ppu_exc_alignment.uPC);
+			exc.info = "alignment interrupt";
 			
 			events.enqueue(ev, IN_BACK);
 
@@ -918,15 +913,15 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 			debug_printf("ThreadID = 0x%llX, PC = 0x%llX\n", bswap64(pDbgData->ppu_exc_ill_inst.uPPUThreadID), bswap64(pDbgData->ppu_exc_ill_inst.uPC));
 			debug_printf("DSISR = 0x%llX\n", bswap64(pDbgData->ppu_exc_ill_inst.uDSISR));
 
-			ev.eid     = EXCEPTION;
+			excinfo_t& exc = ev.set_exception();
 			ev.pid     = ProcessID;
 			ev.tid     = bswap64(pDbgData->ppu_exc_ill_inst.uPPUThreadID);
 			ev.ea      = BADADDR;
 			ev.handled = true;
-			ev.exc.code = 0;
-			ev.exc.can_cont = false;
-			ev.exc.ea = bswap64(pDbgData->ppu_exc_ill_inst.uPC);
-			qstrncpy(ev.exc.info, "illegal instruction", sizeof(ev.exc.info));
+			exc.code = 0;
+			exc.can_cont = false;
+			exc.ea = bswap64(pDbgData->ppu_exc_ill_inst.uPC);
+			exc.info = "illegal instruction";
 			
 			events.enqueue(ev, IN_BACK);
 
@@ -938,15 +933,15 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 			debug_printf("SNPS3_DBG_EVENT_PPU_EXP_TEXT_HTAB_MISS\n");
 			debug_printf("ThreadID = 0x%llX, PC = 0x%llX\n", bswap64(pDbgData->ppu_exc_text_htab_miss.uPPUThreadID), bswap64(pDbgData->ppu_exc_text_htab_miss.uPC));
 			
-			ev.eid     = EXCEPTION;
+			excinfo_t& exc = ev.set_exception();
 			ev.pid     = ProcessID;
 			ev.tid     = bswap64(pDbgData->ppu_exc_text_htab_miss.uPPUThreadID);
 			ev.ea      = BADADDR;
 			ev.handled = true;
-			ev.exc.code = 0;
-			ev.exc.can_cont = false;
-			ev.exc.ea = bswap64(pDbgData->ppu_exc_text_htab_miss.uPC);
-			qstrncpy(ev.exc.info, "instruction storage interrupt", sizeof(ev.exc.info));
+			exc.code = 0;
+			exc.can_cont = false;
+			exc.ea = bswap64(pDbgData->ppu_exc_text_htab_miss.uPC);
+			exc.info = "instruction storage interrupt";
 			
 			events.enqueue(ev, IN_BACK);
 
@@ -958,15 +953,15 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 			debug_printf("SNPS3_DBG_EVENT_PPU_EXP_TEXT_SLB_MISS\n");
 			debug_printf("ThreadID = 0x%llX, PC = 0x%llX\n", bswap64(pDbgData->ppu_exc_text_slb_miss.uPPUThreadID), bswap64(pDbgData->ppu_exc_text_slb_miss.uPC));
 			
-			ev.eid     = EXCEPTION;
+			excinfo_t& exc = ev.set_exception();
 			ev.pid     = ProcessID;
 			ev.tid     = bswap64(pDbgData->ppu_exc_text_slb_miss.uPPUThreadID);
 			ev.ea      = BADADDR;
 			ev.handled = true;
-			ev.exc.code = 0;
-			ev.exc.can_cont = false;
-			ev.exc.ea = bswap64(pDbgData->ppu_exc_text_slb_miss.uPC);
-			qstrncpy(ev.exc.info, "instruction segment interrupt", sizeof(ev.exc.info));
+			exc.code = 0;
+			exc.can_cont = false;
+			exc.ea = bswap64(pDbgData->ppu_exc_text_slb_miss.uPC);
+			exc.info = "instruction segment interrupt";
 			
 			events.enqueue(ev, IN_BACK);
 
@@ -978,15 +973,15 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 			debug_printf("SNPS3_DBG_EVENT_PPU_EXP_DATA_HTAB_MISS\n");
 			debug_printf("ThreadID = 0x%llX, PC = 0x%llX\n", bswap64(pDbgData->ppu_exc_data_htab_miss.uPPUThreadID), bswap64(pDbgData->ppu_exc_data_htab_miss.uPC));
 
-			ev.eid     = EXCEPTION;
+			excinfo_t& exc = ev.set_exception();
 			ev.pid     = ProcessID;
 			ev.tid     = bswap64(pDbgData->ppu_exc_data_htab_miss.uPPUThreadID);
 			ev.ea      = BADADDR;
 			ev.handled = true;
-			ev.exc.code = 0;
-			ev.exc.can_cont = false;
-			ev.exc.ea = bswap64(pDbgData->ppu_exc_data_htab_miss.uPC);
-			qstrncpy(ev.exc.info, "data storage interrupt", sizeof(ev.exc.info));
+			exc.code = 0;
+			exc.can_cont = false;
+			exc.ea = bswap64(pDbgData->ppu_exc_data_htab_miss.uPC);
+			exc.info = "data storage interrupt";
 			
 			events.enqueue(ev, IN_BACK);
 
@@ -998,15 +993,15 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 			debug_printf("SNPS3_DBG_EVENT_PPU_EXP_FLOAT\n");
 			debug_printf("ThreadID = 0x%llX, PC = 0x%llX\n", bswap64(pDbgData->ppu_exc_float.uPPUThreadID), bswap64(pDbgData->ppu_exc_float.uPC));
 
-			ev.eid     = EXCEPTION;
+			excinfo_t& exc = ev.set_exception();
 			ev.pid     = ProcessID;
 			ev.tid     = bswap64(pDbgData->ppu_exc_float.uPPUThreadID);
 			ev.ea      = BADADDR;
 			ev.handled = true;
-			ev.exc.code = 0;
-			ev.exc.can_cont = true;
-			ev.exc.ea = bswap64(pDbgData->ppu_exc_float.uPC);
-			qstrncpy(ev.exc.info, "floating point enabled exception", sizeof(ev.exc.info));
+			exc.code = 0;
+			exc.can_cont = true;
+			exc.ea = bswap64(pDbgData->ppu_exc_float.uPC);
+			exc.info = "floating point enabled exception";
 			
 			events.enqueue(ev, IN_BACK);
 
@@ -1018,15 +1013,15 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 			debug_printf("SNPS3_DBG_EVENT_PPU_EXP_DATA_SLB_MISS\n");
 			debug_printf("ThreadID = 0x%llX, PC = 0x%llX\n", bswap64(pDbgData->ppu_exc_data_slb_miss.uPPUThreadID), bswap64(pDbgData->ppu_exc_data_slb_miss.uPC));
 
-			ev.eid     = EXCEPTION;
+			excinfo_t&  exc = ev.set_exception();
 			ev.pid     = ProcessID;
 			ev.tid     = bswap64(pDbgData->ppu_exc_data_slb_miss.uPPUThreadID);
 			ev.ea      = BADADDR;
 			ev.handled = true;
-			ev.exc.code = 0;
-			ev.exc.can_cont = false;
-			ev.exc.ea = bswap64(pDbgData->ppu_exc_data_slb_miss.uPC);
-			qstrncpy(ev.exc.info, "data segment interrupt", sizeof(ev.exc.info));
+			exc.code = 0;
+			exc.can_cont = false;
+			exc.ea = bswap64(pDbgData->ppu_exc_data_slb_miss.uPC);
+			exc.info = "data segment interrupt";
 			
 			events.enqueue(ev, IN_BACK);
 
@@ -1042,14 +1037,14 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 			if (target_event.uEventType == SNPS3_DBG_EVENT_PPU_EXP_DABR_MATCH)
 				break;
 			
-			ev.eid     = BREAKPOINT;
+			bptaddr_t& bpt = ev.set_bpt();
 			ev.pid     = ProcessID;
 			ev.tid     = bswap64(pDbgData->ppu_exc_dabr_match.uPPUThreadID);
 			ev.ea      = bswap64(pDbgData->ppu_exc_dabr_match.uPC);
 			ev.handled = true;
-			ev.bpt.hea = dabr_addr;
-			ev.bpt.kea = BADADDR;
-			ev.exc.ea  = BADADDR;
+			bpt.hea = dabr_addr;
+			bpt.kea = BADADDR;
+			ev.exc().ea = BADADDR;
 			
 			events.enqueue(ev, IN_BACK);
 		}
@@ -1089,7 +1084,7 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 
 			debug_printf("ThreadID = 0x%llX\n", bswap64(pDbgData->ppu_thread_create.uPPUThreadID));
 
-			ev.eid     = THREAD_START;
+			ev.set_eid(THREAD_STARTED);
 			ev.pid     = ProcessID;
 			ev.tid     = bswap64(pDbgData->ppu_thread_create.uPPUThreadID);
 			ev.ea      = BADADDR;
@@ -1106,12 +1101,11 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 
 			debug_printf("ThreadID = 0x%llX\n", bswap64(pDbgData->ppu_thread_exit.uPPUThreadID));
 
-			ev.eid     = THREAD_EXIT;
 			ev.pid     = ProcessID;
 			ev.tid     = bswap64(pDbgData->ppu_thread_exit.uPPUThreadID);
 			ev.ea      = BADADDR;
 			ev.handled = true;
-			ev.exit_code = 0;
+			ev.set_exit_code(THREAD_EXITED, 0);
 
 			events.enqueue(ev, IN_BACK);
 
@@ -1131,21 +1125,24 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 
 			SNPS3GetModuleInfo(TargetID, ProcessID, bswap32(pDbgData->prx_load.uPRXID), &ModuleInfoSize, ModuleInfo);
 
-			ev.eid     = LIBRARY_LOAD;
+			modinfo_t& modinfo = ev.set_modinfo(LIB_LOADED);
 			ev.pid     = ProcessID;
 			ev.tid     = bswap64(pDbgData->prx_load.uPPUThreadID);
 			ev.ea      = BADADDR;
 			ev.handled = true;
 			
-			_snprintf(ev.modinfo.name, MAXSTR, "%s - %s", ModuleInfo->Hdr.aElfName, ModuleInfo->Hdr.aName);
+			modinfo.name += ModuleInfo->Hdr.aElfName;
+			modinfo.name += " - ";
+			modinfo.name += ModuleInfo->Hdr.aName;
+
 			
-			ev.modinfo.base = ModuleInfo->Segments->uBase;
-			ev.modinfo.size = ModuleInfo->Segments->uMemSize;
-			ev.modinfo.rebase_to = BADADDR;
+			modinfo.base = ModuleInfo->Segments->uBase;
+			modinfo.size = ModuleInfo->Segments->uMemSize;
+			modinfo.rebase_to = BADADDR;
 			
 			events.enqueue(ev, IN_BACK);
 
-			modules[bswap32(pDbgData->prx_load.uPRXID)] = ev.modinfo.name;
+			modules[bswap32(pDbgData->prx_load.uPRXID)] = modinfo.name.c_str();
 
 			free(ModuleInfo);
 		}
@@ -1157,14 +1154,15 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 
 			debug_printf("ThreadID = 0x%llX, ModuleID = 0x%X\n", bswap64(pDbgData->prx_unload.uPPUThreadID), bswap32(pDbgData->prx_unload.uPRXID));
 
-			ev.eid     = LIBRARY_UNLOAD;
 			ev.pid     = ProcessID;
 			ev.tid     = bswap64(pDbgData->prx_unload.uPPUThreadID);
 			ev.ea      = BADADDR;
 			ev.handled = true;
-			
-			qstrncpy(ev.info, modules[bswap32(pDbgData->prx_unload.uPRXID)].c_str(), sizeof(ev.info));
 
+			qstring& info = ev.set_info(LIB_UNLOADED);
+			info.clear();
+			info += modules[bswap32(pDbgData->prx_unload.uPRXID)].c_str();
+		
 			events.enqueue(ev, IN_BACK);
 
 			modules.erase(bswap32(pDbgData->prx_unload.uPRXID));
@@ -1219,7 +1217,7 @@ static void __stdcall TargetEventCallback(HTARGET hTarget, uint uEventType, uint
 
 //--------------------------------------------------------------------------
 // Initialize debugger
-static bool idaapi init_debugger(const char *hostname, int port_num, const char *password)
+static bool idaapi init_debugger(const char *hostname, int port_num, const char *password, qstring* errbuf)
 {
 	SNRESULT snr = SN_S_OK;
 
@@ -1237,7 +1235,7 @@ static bool idaapi init_debugger(const char *hostname, int port_num, const char 
 
 	SNPS3RegisterTargetEventHandler(TargetID, TargetEventCallback, NULL);
 
-	set_idc_func_ex("threadlst", idc_threadlst, idc_threadlst_args, 0);
+	//set_idc_func_ex("threadlst", idc_threadlst, idc_threadlst_args, 0); ///XXX: do thread list
 
 	return true;
 }
@@ -1259,13 +1257,13 @@ static bool idaapi term_debugger(void)
 	SNPS3CloseTargetComms();
 	//SNPS3Exit();
 
-	set_idc_func_ex("threadlst", NULL, idc_threadlst_args, 0);
+	///set_idc_func_ex("threadlst", NULL, idc_threadlst_args, 0); ///XXX: do thread list
 
 	return true;
 }
 
 //--------------------------------------------------------------------------
-int idaapi process_get_info(int n, process_info_t *info)
+int idaapi process_get_info(procinfo_vec_t* procInfo, qstring *errbuf)
 {
 	uint32 NumProcesses;
 	uint32* ProcessesList;
@@ -1277,41 +1275,46 @@ int idaapi process_get_info(int n, process_info_t *info)
 	if (SN_FAILED( snr = SNPS3ProcessList(TargetID, &NumProcesses, NULL)))
 	{
 		debug_printf("SNPS3ProcessList Error: %d\n", snr);
-		return 0;
+		return DRC_NONE;
 	}
 
-	if (n > int(NumProcesses - 1))
-		return 0;
+	/*if (n > int(NumProcesses - 1))
+		return 0;*/
 
 	ProcessesList = (uint32 *)malloc(NumProcesses * sizeof(uint32));
 
 	if (SN_FAILED( snr = SNPS3ProcessList(TargetID, &NumProcesses, ProcessesList)))
 	{
 		debug_printf("SNPS3ProcessList Error: %d\n", snr);
-		return 0;
+		return DRC_NONE;
 	}
 
-	snr = SNPS3ProcessInfo(TargetID, ProcessesList[n], &ProcessesInfoSize, NULL);
+	for (int n = 0; n < NumProcesses; n++) {
+		snr = SNPS3ProcessInfo(TargetID, ProcessesList[n], &ProcessesInfoSize, NULL);
 
-	ProcessesInfo = (SNPS3PROCESSINFO *)malloc(ProcessesInfoSize);
+		ProcessesInfo = (SNPS3PROCESSINFO*)malloc(ProcessesInfoSize);
 
-	if (SN_FAILED( snr = SNPS3ProcessInfo(TargetID, ProcessesList[n], &ProcessesInfoSize, ProcessesInfo)))
-	{
-		debug_printf("SNPS3ProcessInfo Error: %d\n", snr);
-		return 0;
+		if (SN_FAILED(snr = SNPS3ProcessInfo(TargetID, ProcessesList[n], &ProcessesInfoSize, ProcessesInfo)))
+		{
+			debug_printf("SNPS3ProcessInfo Error: %d\n", snr);
+			return DRC_NONE;
+		}
+
+
+		process_info_t info;
+		info.pid = ProcessesList[n];
+		info.name = ProcessesInfo->Hdr.szPath;
+		procInfo->add(info);
+
+		p = strrchr(ProcessesInfo->Hdr.szPath, '/');
+		process_names[ProcessesList[n]] = p + 1;
+
+		free(ProcessesInfo);
 	}
-
-	info->pid = ProcessesList[n];
-	qstrncpy(info->name, ProcessesInfo->Hdr.szPath, sizeof(info->name));
-
-	p = strrchr(ProcessesInfo->Hdr.szPath, '/');
-	process_names[ProcessesList[n]] = p + 1;
-
-	free(ProcessesInfo);
 
 	free(ProcessesList);
 
-	return 1;
+	return DRC_OK;
 }
 
 static const char *get_state_name(uint32 State)
@@ -1373,7 +1376,7 @@ void get_threads_info(void)
 
 			if (attaching == true) 
 			{
-				ev.eid     = THREAD_START;
+				ev.set_eid(THREAD_STARTED);
 				ev.pid     = ProcessID;
 				ev.tid     = ThreadInfo->uThreadID;
 				ev.ea      = read_pc_register((uint32)ThreadInfo->uThreadID);
@@ -1457,21 +1460,24 @@ void get_modules_info(void)
 
 			if (attaching == true)
 			{
-				ev.eid     = LIBRARY_LOAD;
+				modinfo_t& modinfo = ev.set_modinfo(LIB_LOADED);
 				ev.pid     = ProcessID;
 				ev.tid     = NO_THREAD;
 				ev.ea      = BADADDR;
 				ev.handled = true;
 
-				_snprintf(ev.modinfo.name, MAXSTR, "%s - %s", ModuleInfo->Hdr.aElfName, ModuleInfo->Hdr.aName);
+				//_snprintf(modinfo.name, MAXSTR, "%s - %s", ModuleInfo->Hdr.aElfName, ModuleInfo->Hdr.aName);
+				modinfo.name += ModuleInfo->Hdr.aElfName;
+				modinfo.name += " - ";
+				modinfo.name += ModuleInfo->Hdr.aName;
 
-				ev.modinfo.base = ModuleInfo->Segments->uBase;
-				ev.modinfo.size = ModuleInfo->Segments->uMemSize;
-				ev.modinfo.rebase_to = BADADDR;
+				modinfo.base = ModuleInfo->Segments->uBase;
+				modinfo.size = ModuleInfo->Segments->uMemSize;
+				modinfo.rebase_to = BADADDR;
 
 				events.enqueue(ev, IN_BACK);
 
-				modules[ModuleIDs[i]] = ev.modinfo.name;
+				modules[ModuleIDs[i]] = modinfo.name.c_str();
 			}
 
 			for(uint32 j=0;j<ModuleInfo->Hdr.uNumSegments;j++) {
@@ -1588,7 +1594,7 @@ static int idaapi deci3_start_process(const char *path,
 	if (SN_FAILED( snr = SNPS3ProcessLoad(TargetID, SNPS3_DEF_PROCESS_PRI, path, 0, NULL, 0, NULL, &ProcessID, NULL, SNPS3_LOAD_FLAG_ENABLE_DEBUGGING | SNPS3_LOAD_FLAG_USE_ELF_PRIORITY | SNPS3_LOAD_FLAG_USE_ELF_STACKSIZE)))
 	{
 		msg("SNPS3ProcessLoad Error: %d\n", snr);
-		return 0;
+		return DRC_NONE;
 	}
 
 	debug_printf("ProcessID: 0x%X\n", ProcessID);
@@ -1607,7 +1613,7 @@ static int idaapi deci3_start_process(const char *path,
 
 	events.enqueue(ev, IN_BACK);*/
 
-	return 0;
+	return DRC_OK;
 }
 
 //--------------------------------------------------------------------------
@@ -1621,16 +1627,18 @@ int idaapi deci3_attach_process(pid_t pid, int event_id)
 	ProcessID = pid;
 
 	debug_event_t ev;
-	ev.eid     = PROCESS_START;
+	
 	ev.pid     = ProcessID;
 	ev.tid     = NO_THREAD;
 	ev.ea      = BADADDR;
 	ev.handled = true;
 
-    qstrncpy(ev.modinfo.name, process_names[ProcessID].c_str(), sizeof(ev.modinfo.name));
-    ev.modinfo.base = 0x10200;
-    ev.modinfo.size = 0;
-    ev.modinfo.rebase_to = BADADDR;
+	modinfo_t& modinfo = ev.set_modinfo(PROCESS_STARTED);
+	modinfo.name = process_names[ProcessID].c_str();
+    modinfo.base = 0x10200;
+    modinfo.size = 0;
+    modinfo.rebase_to = BADADDR;
+	
 
 	events.enqueue(ev, IN_BACK);
 
@@ -1638,22 +1646,23 @@ int idaapi deci3_attach_process(pid_t pid, int event_id)
 	get_modules_info();
 	clear_all_bp(-1);
 
-    ev.eid     = PROCESS_ATTACH;
+	ev.set_eid(PROCESS_ATTACHED);
     ev.pid     = ProcessID;
     ev.tid     = NO_THREAD;
     ev.ea      = BADADDR;
     ev.handled = true;
 
-    qstrncpy(ev.modinfo.name, process_names[ProcessID].c_str(), sizeof(ev.modinfo.name));
-    ev.modinfo.base = 0x10200;
-    ev.modinfo.size = 0;
-    ev.modinfo.rebase_to = BADADDR;
+	modinfo = ev.set_modinfo(PROCESS_ATTACHED);
+	modinfo.name = process_names[ProcessID].c_str();
+	modinfo.base = 0x10200;
+	modinfo.size = 0;
+	modinfo.rebase_to = BADADDR;
 
     events.enqueue(ev, IN_BACK);
 
 	process_names.clear();
 
-    return 1;
+    return DRC_OK;
 }
 
 //--------------------------------------------------------------------------
@@ -1662,7 +1671,7 @@ int idaapi deci3_detach_process(void)
 	// TMAPI cant detach
 
 	debug_event_t ev;
-    ev.eid     = PROCESS_DETACH;
+    ev.set_eid(PROCESS_DETACHED);
     ev.pid     = ProcessID;
 
     events.enqueue(ev, IN_BACK);
@@ -1681,7 +1690,7 @@ int idaapi prepare_to_pause_process(void)
 	SNPS3ProcessStop(TargetID, ProcessID);
 
 	debug_event_t ev;
-	ev.eid     = PROCESS_SUSPEND;
+	ev.set_eid(PROCESS_SUSPENDED);
 	ev.pid     = ProcessID;
 
     events.enqueue(ev, IN_BACK);
@@ -1696,11 +1705,10 @@ int idaapi deci3_exit_process(void)
 	//SNPS3TerminateGameProcess
 
     debug_event_t ev;
-    ev.eid     = PROCESS_EXIT;
     ev.pid     = ProcessID;
     ev.tid     = NO_THREAD;
     ev.ea      = BADADDR;
-	ev.exit_code = 0;
+	ev.set_exit_code(PROCESS_EXITED, 0);
     ev.handled = true;
 
     events.enqueue(ev, IN_BACK);
@@ -1762,7 +1770,7 @@ gdecode_t idaapi get_debug_event(debug_event_t *event, int ida_is_idle)
 
 #endif
 
-			if (event->eid == PROCESS_ATTACH)
+			if (event->eid() == PROCESS_ATTACHED)
 			{
 				attaching = false;
 			}
@@ -1812,9 +1820,9 @@ int idaapi continue_after_event(const debug_event_t *event)
 
 #endif
 
-	if (event->eid == PROCESS_ATTACH || event->eid == PROCESS_SUSPEND || event->eid == STEP || event->eid == BREAKPOINT) {
+	if (event->eid() == PROCESS_ATTACHED || event->eid() == PROCESS_SUSPENDED || event->eid() == STEP || event->eid() == BREAKPOINT) {
 
-		if (event->eid == BREAKPOINT)
+		if (event->eid() == BREAKPOINT)
 		{
 			if (addr_has_bp(event->ea) == true)
 			{	
@@ -1833,7 +1841,7 @@ int idaapi continue_after_event(const debug_event_t *event)
 				SNPS3SetBreakPoint(TargetID, PS3_UI_CPU, ProcessID, -1, event->ea);
 			}
 
-			if (event->bpt.hea == dabr_addr)
+			if (event->bpt().hea == dabr_addr)
 			{
 				SNPS3SetDABR(TargetID, ProcessID, dabr_addr | 4);
 
@@ -2266,8 +2274,8 @@ int idaapi get_memory_info(meminfo_vec_t &areas)
 
 	memory_info_t info;
 
-	info.startEA = 0;
-	info.endEA = 0xFFFF0000;
+	info.start_ea = 0;
+	info.end_ea = 0xFFFF0000;
 	info.name = NULL;
 	info.sclass = NULL;
 	info.sbase = 0;
@@ -2614,6 +2622,55 @@ int idaapi send_ioctl(int fn, const void *buf, size_t size, void **poutbuf, ssiz
 	return 0;
 }
 
+static ssize_t idaapi idd_notify(void*, int msgid, va_list va)
+{
+	int retcode = DRC_NONE;
+	qstring* errbuf;
+
+	switch (msgid)
+	{
+		case debugger_t::ev_init_debugger:
+		{
+			const char* hostname = va_arg(va, const char*);
+			int portnum = va_arg(va, int);
+			const char* password = va_arg(va, const char*);
+			errbuf = va_arg(va, qstring*);
+			QASSERT(1522, errbuf != NULL);
+			retcode = init_debugger(hostname, portnum, password, errbuf);
+		}
+		case debugger_t::ev_term_debugger:
+			retcode = term_debugger();
+			break;
+		case debugger_t::ev_get_processes:
+		{
+			procinfo_vec_t* procs = va_arg(va, procinfo_vec_t*);
+			errbuf = va_arg(va, qstring*);
+			retcode = process_get_info(procs, errbuf);
+			break;
+		}
+		case debugger_t::ev_start_process:
+		{
+			const char* path = va_arg(va, const char*);
+			const char* args = va_arg(va, const char*);
+			const char* startdir = va_arg(va, const char*);
+			uint32 dbg_proc_flags = va_arg(va, uint32);
+			const char* input_path = va_arg(va, const char*);
+			uint32 input_file_crc32 = va_arg(va, uint32);
+			errbuf = va_arg(va, qstring*);
+			retcode = deci3_start_process(path, args, startdir, dbg_proc_flags, input_path, input_file_crc32);
+			break;
+		}
+		case debugger_t::ev_attach_process:
+			pid_t pid = va_argi(va, pid_t);
+			int event_id = va_arg(va, int);
+			uint32 dbg_proc_flags = va_arg(va, uint32);
+			errbuf = va_arg(va, qstring*);
+			retcode = deci3_attach_process(pid, event_id);
+		break;
+	}
+	return retcode;
+}
+
 //--------------------------------------------------------------------------
 //
 //      DEBUGGER DESCRIPTION BLOCK
@@ -2626,7 +2683,7 @@ debugger_t debugger =
   DEBUGGER_ID_PLAYSTATION_3,	// Debugger API module id
   PROCESSOR_NAME,				// Required processor name
   DBG_FLAG_REMOTE | DBG_FLAG_NOHOST | DBG_FLAG_CAN_CONT_BPT,
-
+  0, //flags2
   register_classes,				// Array of register class names
   RC_GENERAL,					// Mask of default printed register classes
   registers,					// Array of registers
@@ -2637,11 +2694,13 @@ debugger_t debugger =
   bpt_code,						// Array of bytes for a breakpoint instruction
   qnumber(bpt_code),			// Size of this array
   0,							// for miniidbs: use this value for the file type after attaching
-  0,							// reserved
-
-  init_debugger,
+  0,							// resume mode
+  NULL, //dbg options
+  idd_notify, //notify callback
+  
+  /*init_debugger,
   term_debugger,
-
+  
   process_get_info,
   deci3_start_process,
   deci3_attach_process,
@@ -2680,5 +2739,5 @@ debugger_t debugger =
   NULL, //cleanup_appcall
   NULL, //eval_lowcnd
   NULL, //write_file
-  send_ioctl,
+  send_ioctl,*/
 };

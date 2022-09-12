@@ -13,7 +13,6 @@
 // If not, see http ://www.gnu.org/licenses/
 
 #include <ida.hpp>
-#include <area.hpp>
 #include <idd.hpp>
 #include <dbg.hpp>
 #include <loader.hpp>
@@ -27,7 +26,7 @@ bool plugin_inited;
 
 //--------------------------------------------------------------------------
 // Initialize debugger plugin
-static int idaapi init(void)
+static plugmod_t* idaapi init(void)
 {
 	if (init_plugin())
 	{
@@ -51,9 +50,9 @@ static void idaapi term(void)
 
 //--------------------------------------------------------------------------
 // The plugin method - usually is not used for debugger plugins
-static void idaapi run(int /*arg*/)
+static bool idaapi run(size_t /*arg*/)
 {
-
+	return true;
 }
 
 //--------------------------------------------------------------------------
