@@ -35,7 +35,7 @@
 #include "debmod.h"
 #include <ps3tmapi.h>
 
-#ifdef _DEBUG
+#ifdef DECI3DBG_DEBUG
 #define debug_printf msg
 #else
 #define debug_printf(...)
@@ -1226,6 +1226,9 @@ static bool idaapi init_debugger(const char *hostname, int port_num, const char 
 		msg("Failed to initialize PS3TM SDK\n");
 		return false;
 	}
+	else {
+		msg("SNPS3InitTargetComms succeeded\n");
+	}
 
 	if (!SetUpTarget() || !ConnectToActiveTarget())
 	{
@@ -1274,20 +1277,22 @@ int idaapi process_get_info(procinfo_vec_t* procInfo, qstring *errbuf)
 
 	if (SN_FAILED( snr = SNPS3ProcessList(TargetID, &NumProcesses, NULL)))
 	{
-		debug_printf("SNPS3ProcessList Error: %d\n", snr);
+		debug_printf("SNPS3ProcessList 1 Error: %d\n", snr);
 		return DRC_NONE;
 	}
 
-	/*if (n > int(NumProcesses - 1))
-		return 0;*/
+	if (NumProcesses < 1)
+		return DRC_NONE;
 
 	ProcessesList = (uint32 *)malloc(NumProcesses * sizeof(uint32));
 
 	if (SN_FAILED( snr = SNPS3ProcessList(TargetID, &NumProcesses, ProcessesList)))
 	{
-		debug_printf("SNPS3ProcessList Error: %d\n", snr);
+		debug_printf("SNPS3ProcessList 2 Error: %d\n", snr);
 		return DRC_NONE;
 	}
+
+	debug_printf("Got %d processes\n", NumProcesses);
 
 	for (int n = 0; n < NumProcesses; n++) {
 		snr = SNPS3ProcessInfo(TargetID, ProcessesList[n], &ProcessesInfoSize, NULL);
@@ -1301,10 +1306,10 @@ int idaapi process_get_info(procinfo_vec_t* procInfo, qstring *errbuf)
 		}
 
 
-		process_info_t info;
+		process_info_t &info = procInfo->push_back();
 		info.pid = ProcessesList[n];
 		info.name = ProcessesInfo->Hdr.szPath;
-		procInfo->add(info);
+		debug_printf("Found process: %s\n", info.name.c_str());
 
 		p = strrchr(ProcessesInfo->Hdr.szPath, '/');
 		process_names[ProcessesList[n]] = p + 1;
@@ -1716,28 +1721,28 @@ int idaapi deci3_exit_process(void)
 	return 1;
 }
 
-#ifdef _DEBUG
+#ifdef DECI3DBG_DEBUG
 
 static const char *get_event_name(event_id_t id)
 {
 	switch ( id )
 	{
 		case NO_EVENT:        return "NO_EVENT";
-		case THREAD_START:    return "THREAD_START";
-		case THREAD_EXIT:     return "THREAD_EXIT";
-		case PROCESS_ATTACH:  return "PROCESS_ATTACH";
-		case PROCESS_DETACH:  return "PROCESS_DETACH";
-		case PROCESS_START:   return "PROCESS_START";
-		case PROCESS_SUSPEND: return "PROCESS_SUSPEND";
-		case PROCESS_EXIT:    return "PROCESS_EXIT";
-		case LIBRARY_LOAD:    return "LIBRARY_LOAD";
-		case LIBRARY_UNLOAD:  return "LIBRARY_UNLOAD";
+		case THREAD_STARTED:    return "THREAD_START";
+		case THREAD_EXITED:     return "THREAD_EXIT";
+		case PROCESS_ATTACHED:  return "PROCESS_ATTACH";
+		case PROCESS_DETACHED:  return "PROCESS_DETACH";
+		case PROCESS_STARTED:   return "PROCESS_START";
+		case PROCESS_SUSPENDED: return "PROCESS_SUSPEND";
+		case PROCESS_EXITED:    return "PROCESS_EXIT";
+		case LIB_LOADED:    return "LIBRARY_LOAD";
+		case LIB_UNLOADED:  return "LIBRARY_UNLOAD";
 		case BREAKPOINT:      return "BREAKPOINT";
 		case STEP:            return "STEP";
 		case EXCEPTION:       return "EXCEPTION";
 		case INFORMATION:     return "INFORMATION";
-		case SYSCALL:         return "SYSCALL";
-		case WINMESSAGE:      return "WINMESSAGE";
+		//case SYSCALL:         return "SYSCALL";
+		//case WINMESSAGE:      return "WINMESSAGE";
 		default:              return "???";
 	}
 
@@ -1759,13 +1764,13 @@ gdecode_t idaapi get_debug_event(debug_event_t *event, int ida_is_idle)
 
 #ifdef _DEBUG
 
-			if (event->eid == BREAKPOINT && event->bpt.hea != BADADDR)
+			if (event->eid() == BREAKPOINT && event->bpt().hea != BADADDR)
 			{
 				debug_printf("get_debug_event: BREAKPOINT (HW)\n");
 
 			} else {
 
-				debug_printf("get_debug_event: %s\n", get_event_name(event->eid));
+				debug_printf("get_debug_event: %s\n", get_event_name(event->eid()));
 			}
 
 #endif
@@ -1809,13 +1814,13 @@ int idaapi continue_after_event(const debug_event_t *event)
 
 #ifdef _DEBUG
 
-	if (event->eid == BREAKPOINT && event->bpt.hea != BADADDR)
+	if (event->eid() == BREAKPOINT && event->bpt().hea != BADADDR)
 	{
 		debug_printf("continue_after_event: BREAKPOINT (HW)\n");
 
 	} else {
 
-		debug_printf("continue_after_event: %s\n", get_event_name(event->eid));
+		debug_printf("continue_after_event: %s\n", get_event_name(event->eid()));
 	}
 
 #endif
@@ -2627,6 +2632,8 @@ static ssize_t idaapi idd_notify(void*, int msgid, va_list va)
 	int retcode = DRC_NONE;
 	qstring* errbuf;
 
+	debug_printf("idd_notify: %d (%d)\n", msgid, GetCurrentThreadId());
+
 	switch (msgid)
 	{
 		case debugger_t::ev_init_debugger:
@@ -2637,6 +2644,7 @@ static ssize_t idaapi idd_notify(void*, int msgid, va_list va)
 			errbuf = va_arg(va, qstring*);
 			QASSERT(1522, errbuf != NULL);
 			retcode = init_debugger(hostname, portnum, password, errbuf);
+			break;
 		}
 		case debugger_t::ev_term_debugger:
 			retcode = term_debugger();
@@ -2683,7 +2691,11 @@ debugger_t debugger =
   DEBUGGER_ID_PLAYSTATION_3,	// Debugger API module id
   PROCESSOR_NAME,				// Required processor name
   DBG_FLAG_REMOTE | DBG_FLAG_NOHOST | DBG_FLAG_CAN_CONT_BPT,
-  0, //flags2
+  DBG_HAS_GET_PROCESSES | DBG_HAS_ATTACH_PROCESS
+| DBG_HAS_REQUEST_PAUSE
+| DBG_HAS_SET_EXCEPTION_INFO
+| DBG_HAS_THREAD_SUSPEND
+| DBG_HAS_THREAD_CONTINUE,
   register_classes,				// Array of register class names
   RC_GENERAL,					// Mask of default printed register classes
   registers,					// Array of registers
