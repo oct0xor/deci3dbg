@@ -1130,6 +1130,8 @@ static void ProcessTargetSpecificEvent(uint uDataLen, byte *pData)
 			ev.ea      = BADADDR;
 			ev.handled = true;
 			
+
+			modinfo.name.clear();
 			modinfo.name += ModuleInfo->Hdr.aElfName;
 			modinfo.name += " - ";
 			modinfo.name += ModuleInfo->Hdr.aName;
@@ -1301,14 +1303,14 @@ int idaapi process_get_info(procinfo_vec_t* procInfo, qstring *errbuf)
 		if (SN_FAILED(snr = SNPS3ProcessInfo(TargetID, ProcessesList[n], &ProcessesInfoSize, ProcessesInfo)))
 		{
 			debug_printf("SNPS3ProcessInfo Error: %d\n", snr);
-			return DRC_NONE;
+			//return DRC_NONE;
 		}
-
-
-		process_info_t &info = procInfo->push_back();
-		info.pid = ProcessesList[n];
-		info.name = ProcessesInfo->Hdr.szPath;
-		debug_printf("Found process: %s\n", info.name.c_str());
+		else {
+			process_info_t& info = procInfo->push_back();
+			info.pid = ProcessesList[n];
+			info.name = ProcessesInfo->Hdr.szPath;
+			debug_printf("Found process: %s\n", info.name.c_str());
+		}
 
 		free(ProcessesInfo);
 	}
@@ -1377,9 +1379,13 @@ void get_threads_info(void)
 
 			if (attaching == true) 
 			{
-				ev.set_eid(THREAD_STARTED);
+				qstring &info = ev.set_info(THREAD_STARTED);
 				ev.pid     = ProcessID;
 				ev.tid     = ThreadInfo->uThreadID;
+
+				info.clear();
+				info += (const char*)(ThreadInfo + 1);
+				
 				ev.ea      = read_pc_register((uint32)ThreadInfo->uThreadID);
 				ev.handled = true;
 
@@ -1467,7 +1473,7 @@ void get_modules_info(void)
 				ev.ea      = BADADDR;
 				ev.handled = true;
 
-				//_snprintf(modinfo.name, MAXSTR, "%s - %s", ModuleInfo->Hdr.aElfName, ModuleInfo->Hdr.aName);
+				modinfo.name.clear();
 				modinfo.name += ModuleInfo->Hdr.aElfName;
 				modinfo.name += " - ";
 				modinfo.name += ModuleInfo->Hdr.aName;
