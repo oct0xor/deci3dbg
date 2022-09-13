@@ -1771,7 +1771,7 @@ gdecode_t idaapi get_debug_event(debug_event_t *event, int ida_is_idle)
 		if ( events.retrieve(event) )
 		{
 
-#ifdef _DEBUG
+#ifdef DECI3DBG_DEBUG
 
 			if (event->eid() == BREAKPOINT && event->bpt().hea != BADADDR)
 			{
@@ -1821,7 +1821,7 @@ int idaapi continue_after_event(const debug_event_t *event)
 	if ( event == NULL )
 		return false;
 
-#ifdef _DEBUG
+#ifdef DECI3DBG_DEBUG
 
 	if (event->eid() == BREAKPOINT && event->bpt().hea != BADADDR)
 	{
@@ -1888,7 +1888,7 @@ int idaapi continue_after_event(const debug_event_t *event)
 }
 
 //--------------------------------------------------------------------------
-void idaapi stopped_at_debug_event(bool dlls_added)
+void idaapi stopped_at_debug_event(thread_name_vec_t* thr_names, bool dlls_added)
 {
 }
 
@@ -2641,8 +2641,6 @@ static ssize_t idaapi idd_notify(void* user_data, int msgid, va_list va)
 	int retcode = DRC_NONE;
 	qstring* errbuf;
 
-	debug_printf("idd_notify: %d\n", msgid);
-
 	switch (msgid)
 	{
 		case debugger_t::ev_init_debugger:
@@ -2677,13 +2675,122 @@ static ssize_t idaapi idd_notify(void* user_data, int msgid, va_list va)
 			retcode = deci3_start_process(path, args, startdir, dbg_proc_flags, input_path, input_file_crc32);
 			break;
 		}
-		case debugger_t::ev_attach_process:
+		case debugger_t::ev_attach_process: {
 			pid_t pid = va_argi(va, pid_t);
 			int event_id = va_arg(va, int);
 			uint32 dbg_proc_flags = va_arg(va, uint32);
 			errbuf = va_arg(va, qstring*);
 			retcode = deci3_attach_process(pid, event_id, dbg_proc_flags, errbuf);
-		break;
+			break;
+		}
+		case debugger_t::ev_get_debug_event: {
+			gdecode_t* code = va_arg(va, gdecode_t*);
+			debug_event_t* event = va_arg(va, debug_event_t*);
+			int timeout_ms = va_arg(va, int);
+			*code = get_debug_event(event, timeout_ms);
+			retcode = DRC_OK;
+			break;
+		}
+		case debugger_t::ev_get_debapp_attrs: {
+			debapp_attrs_t* out_pattrs = va_arg(va, debapp_attrs_t*);
+			out_pattrs->platform = "linux";
+			out_pattrs->addrsize = 8;
+			out_pattrs->is_be = true;
+			out_pattrs->cbsize = 0;
+			retcode = DRC_OK;
+
+			break;
+		}
+		case debugger_t::ev_rebase_if_required_to: {
+			ea_t new_base = va_arg(va, ea_t);
+			rebase_if_required_to(new_base);
+			retcode = DRC_OK;
+			break;
+		}
+		case debugger_t::ev_request_pause: {
+			retcode = prepare_to_pause_process();
+			break;
+												 }
+		case debugger_t::ev_resume: {
+			debug_event_t* event = va_arg(va, debug_event_t*);
+			retcode = continue_after_event(event);
+			break;
+		}
+		case debugger_t::ev_suspended: {
+			bool dlls_added = va_argi(va, bool);
+			thread_name_vec_t* thr_names = va_arg(va, thread_name_vec_t*);
+			stopped_at_debug_event(thr_names, dlls_added);
+			retcode = DRC_OK;
+			break;
+		}
+		case debugger_t::ev_exit_process: {
+			retcode = deci3_exit_process();
+			break;
+		}
+		case debugger_t::ev_get_memory_info: {
+			meminfo_vec_t* ranges = va_arg(va, meminfo_vec_t*);
+			retcode = get_memory_info(*ranges);
+			break;
+		}
+		case debugger_t::ev_read_registers: {
+			thid_t tid = va_argi(va, thid_t);
+			int clsmask = va_arg(va, int);
+			regval_t* values = va_arg(va, regval_t*);
+			errbuf = va_arg(va, qstring*);
+			retcode = read_registers(tid, clsmask, values);
+			break;
+		}
+		case debugger_t::ev_write_register: {
+			thid_t tid = va_argi(va, thid_t);
+			int regidx = va_arg(va, int);
+			const regval_t* value = va_arg(va, const regval_t*);
+			errbuf = va_arg(va, qstring*);
+			retcode = write_register(tid, regidx, value);
+			break;
+		}
+		case debugger_t::ev_read_memory: {
+			size_t* nbytes = va_arg(va, size_t*);
+			ea_t ea = va_arg(va, ea_t);
+			void* buffer = va_arg(va, void*);
+			size_t size = va_arg(va, size_t);
+			errbuf = va_arg(va, qstring*);
+			ssize_t code = read_memory(ea, buffer, size);
+			*nbytes = code >= 0 ? code : 0;
+			retcode = code >= 0 ? DRC_OK : DRC_NOPROC;
+			break;
+		}
+		case debugger_t::ev_write_memory: {
+			size_t* nbytes = va_arg(va, size_t*);
+			ea_t ea = va_arg(va, ea_t);
+			const void* buffer = va_arg(va, void*);
+			size_t size = va_arg(va, size_t);
+			errbuf = va_arg(va, qstring*);
+			ssize_t code = write_memory(ea, buffer, size);
+			*nbytes = code >= 0 ? code : 0;
+			retcode = code >= 0 ? DRC_OK : DRC_NOPROC;
+			break;
+		}
+		case debugger_t::ev_check_bpt: {
+			int* bptvc = va_arg(va, int*);
+			bpttype_t type = va_argi(va, bpttype_t);
+			ea_t ea = va_arg(va, ea_t);
+			int len = va_arg(va, int);
+			*bptvc = is_ok_bpt(type, ea, len);
+			retcode = DRC_OK;
+			break;
+		}
+		case debugger_t::ev_update_bpts: {
+			int* nbpts = va_arg(va, int*);
+			update_bpt_info_t* bpts = va_arg(va, update_bpt_info_t*);
+			int nadd = va_arg(va, int);
+			int ndel = va_arg(va, int);
+			retcode = update_bpts(bpts, nadd, ndel);
+			break;
+		}
+		default: {
+			debug_printf("Unhandled event %d\n", msgid);
+			break;
+		}
 	}
 	return retcode;
 }
