@@ -75,7 +75,6 @@ uint8 dabr_type;
 eventlist_t events;
 SNPS3_DBG_EVENT_DATA target_event;
 
-std::unordered_map<int, std::string> process_names;
 std::unordered_map<int, std::string> modules;
 std::unordered_map<int, int> main_bpts_map;
 
@@ -472,9 +471,9 @@ int __stdcall EnumCallBack(HTARGET hTarget)
 		{
 			// Store target parameters.
 			pti->hTarget = hTarget;
-			pti->pszName = _strdup(ti.pszName);
-			pti->pszHomeDir = _strdup(ti.pszHomeDir);
-			pti->pszFSDir = _strdup(ti.pszFSDir);
+			pti->pszName = strdup(ti.pszName);
+			pti->pszHomeDir = strdup(ti.pszHomeDir);
+			pti->pszFSDir = strdup(ti.pszFSDir);
 
 			// Store this target.
 			Targets.push_back(pti.release());
@@ -1311,9 +1310,6 @@ int idaapi process_get_info(procinfo_vec_t* procInfo, qstring *errbuf)
 		info.name = ProcessesInfo->Hdr.szPath;
 		debug_printf("Found process: %s\n", info.name.c_str());
 
-		p = strrchr(ProcessesInfo->Hdr.szPath, '/');
-		process_names[ProcessesList[n]] = p + 1;
-
 		free(ProcessesInfo);
 	}
 
@@ -1623,27 +1619,46 @@ static int idaapi deci3_start_process(const char *path,
 
 //--------------------------------------------------------------------------
 // Attach to an existing running process
-int idaapi deci3_attach_process(pid_t pid, int event_id)
+drc_t deci3_attach_process(pid_t process_id,
+	int event_id,
+	int flags,
+	qstring* errbuf)
 {
+	debug_event_t ev;
+
+	modinfo_t& modinfo = ev.set_modinfo(PROCESS_STARTED);
+	modinfo.base = 0x10200;
+	modinfo.size = 0;
+	modinfo.rebase_to = BADADDR;
+
+	ev.pid = ProcessID;
+	ev.tid = NO_THREAD;
+	ev.ea = BADADDR;
+	ev.handled = true;
+
+	SNRESULT snr;
 	//block the process until all generated events are processed
 	attaching = true;
 
-	SNPS3ProcessAttach(TargetID, PS3_UI_CPU, pid);
-	ProcessID = pid;
+	SNPS3ProcessAttach(TargetID, PS3_UI_CPU, process_id);
+	ProcessID = process_id;
 
-	debug_event_t ev;
-	
-	ev.pid     = ProcessID;
-	ev.tid     = NO_THREAD;
-	ev.ea      = BADADDR;
-	ev.handled = true;
+	UINT32 ProcessesInfoSize;
+	if (SN_FAILED(snr = SNPS3ProcessInfo(TargetID, ProcessID, &ProcessesInfoSize, NULL))) {
+		debug_printf("SNPS3ProcessInfo Error: %d\n", snr);
+		return DRC_NONE;
+	}
 
-	modinfo_t& modinfo = ev.set_modinfo(PROCESS_STARTED);
-	modinfo.name = process_names[ProcessID].c_str();
-    modinfo.base = 0x10200;
-    modinfo.size = 0;
-    modinfo.rebase_to = BADADDR;
+	SNPS3PROCESSINFO *ProcessesInfo = (SNPS3PROCESSINFO*)malloc(ProcessesInfoSize);
+	if (ProcessesInfo == NULL) {
+		return DRC_NONE;
+	}
+	if (SN_FAILED(snr = SNPS3ProcessInfo(TargetID, ProcessID, &ProcessesInfoSize, ProcessesInfo))) {
+		debug_printf("SNPS3ProcessInfo Error: %d\n", snr);
+		return DRC_NONE;
+	}
 	
+	modinfo.name += ProcessesInfo->Hdr.szPath;
 
 	events.enqueue(ev, IN_BACK);
 
@@ -1651,21 +1666,15 @@ int idaapi deci3_attach_process(pid_t pid, int event_id)
 	get_modules_info();
 	clear_all_bp(-1);
 
-	ev.set_eid(PROCESS_ATTACHED);
-    ev.pid     = ProcessID;
-    ev.tid     = NO_THREAD;
-    ev.ea      = BADADDR;
-    ev.handled = true;
-
-	modinfo = ev.set_modinfo(PROCESS_ATTACHED);
-	modinfo.name = process_names[ProcessID].c_str();
-	modinfo.base = 0x10200;
-	modinfo.size = 0;
-	modinfo.rebase_to = BADADDR;
+	modinfo_t& modinfo_pa = ev.set_modinfo(PROCESS_ATTACHED);
+	modinfo_pa.base = 0x10200;
+	modinfo_pa.size = 0;
+	modinfo_pa.rebase_to = BADADDR;
+	modinfo_pa.name += ProcessesInfo->Hdr.szPath;
 
     events.enqueue(ev, IN_BACK);
 
-	process_names.clear();
+	free(ProcessesInfo);
 
     return DRC_OK;
 }
@@ -1829,7 +1838,7 @@ int idaapi continue_after_event(const debug_event_t *event)
 
 		if (event->eid() == BREAKPOINT)
 		{
-			if (addr_has_bp(event->ea) == true)
+			if (addr_has_bp(event->ea))
 			{	
 				SNPS3ClearBreakPoint(TargetID, PS3_UI_CPU, ProcessID, -1, event->ea);
 
@@ -2627,12 +2636,12 @@ int idaapi send_ioctl(int fn, const void *buf, size_t size, void **poutbuf, ssiz
 	return 0;
 }
 
-static ssize_t idaapi idd_notify(void*, int msgid, va_list va)
+static ssize_t idaapi idd_notify(void* user_data, int msgid, va_list va)
 {
 	int retcode = DRC_NONE;
 	qstring* errbuf;
 
-	debug_printf("idd_notify: %d (%d)\n", msgid, GetCurrentThreadId());
+	debug_printf("idd_notify: %d\n", msgid);
 
 	switch (msgid)
 	{
@@ -2673,7 +2682,7 @@ static ssize_t idaapi idd_notify(void*, int msgid, va_list va)
 			int event_id = va_arg(va, int);
 			uint32 dbg_proc_flags = va_arg(va, uint32);
 			errbuf = va_arg(va, qstring*);
-			retcode = deci3_attach_process(pid, event_id);
+			retcode = deci3_attach_process(pid, event_id, dbg_proc_flags, errbuf);
 		break;
 	}
 	return retcode;
